@@ -18,11 +18,11 @@ jobs:
             platform: windows-x86_64
             bundle: nsis
             extension: exe
-          - os: macos-15
+          - os: macos-15-intel
             platform: darwin-x86_64
             bundle: dmg
             extension: dmg
-          - os: macos-15-arm
+          - os: macos-15
             platform: darwin-aarch64
             bundle: dmg
             extension: dmg
