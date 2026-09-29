@@ -1,6 +1,7 @@
 # deps / build output
 node_modules/
 dist/
+latest.json
 # rust
 src-tauri/target/
 src-tauri/gen/
