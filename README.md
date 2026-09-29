@@ -31,4 +31,4 @@ git push origin main
 git push origin v0.1.1
 ```
 
-GitHub Actions 会在 tag 推送后测试、构建 Windows NSIS 安装包，并创建含安装包及 `latest.json` 的 GitHub Release。普通代码推送不会发版。客户端将从最新 Release 检查更新；尚未配置 Windows 代码签名。
+GitHub Actions 会在 tag 推送后并行测试、构建 Windows x64 NSIS、macOS Intel DMG、macOS Apple Silicon DMG。三个构建全部成功才发布含安装包及 `latest.json` 的 GitHub Release。普通代码推送不会发版。客户端将从最新 Release 检查更新；目前没有 Windows 代码签名或 Apple 签名与公证，系统可能提示未验证开发者。

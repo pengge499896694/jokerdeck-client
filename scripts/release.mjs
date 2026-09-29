@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { basename } from "node:path";
-import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const root = new URL("../", import.meta.url);
 const readJson = (path) => JSON.parse(readFileSync(new URL(path, root), "utf8"));
-const [command, tag, installer] = process.argv.slice(2);
+const [command, tag, releaseDir] = process.argv.slice(2);
 const version = tag?.match(/^v(\d+\.\d+\.\d+)$/)?.[1];
 
 if (!version) {
@@ -29,14 +29,30 @@ if (command === "verify") {
   console.log(`Release version verified: ${version}`);
 } else if (command === "manifest") {
   const repository = process.env.GITHUB_REPOSITORY;
-  if (!installer || !repository || !/^[\w.-]+\/[\w.-]+$/.test(repository)) {
-    console.error("Manifest requires an installer path and GITHUB_REPOSITORY");
+  if (!releaseDir || !repository || !/^[\w.-]+\/[\w.-]+$/.test(repository)) {
+    console.error("Manifest requires a release directory and GITHUB_REPOSITORY");
     process.exit(1);
   }
-  const url = `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(basename(installer))}`;
+  const assets = {
+    "windows-x86_64": `jokerdeck_${tag}_windows-x86_64.exe`,
+    "darwin-x86_64": `jokerdeck_${tag}_darwin-x86_64.dmg`,
+    "darwin-aarch64": `jokerdeck_${tag}_darwin-aarch64.dmg`,
+  };
+  for (const filename of Object.values(assets)) {
+    if (!existsSync(join(releaseDir, filename))) {
+      console.error(`Missing release asset: ${filename}`);
+      process.exit(1);
+    }
+  }
+  const platforms = Object.fromEntries(
+    Object.entries(assets).map(([platform, filename]) => [
+      platform,
+      `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(filename)}`,
+    ]),
+  );
   writeFileSync(new URL("latest.json", root), `${JSON.stringify({
     version,
-    platforms: { "windows-x86_64": url },
+    platforms,
   }, null, 2)}\n`);
   console.log("Created latest.json");
 } else {

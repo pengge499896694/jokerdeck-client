@@ -1,4 +1,4 @@
-name: Release Windows client
+name: Release desktop clients
 
 on:
   push:
@@ -9,10 +9,24 @@ permissions:
   contents: read
 
 jobs:
-  release:
-    runs-on: windows-latest
-    permissions:
-      contents: write
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x86_64
+            bundle: nsis
+            extension: exe
+          - os: macos-15
+            platform: darwin-x86_64
+            bundle: dmg
+            extension: dmg
+          - os: macos-15-arm
+            platform: darwin-aarch64
+            bundle: dmg
+            extension: dmg
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -25,7 +39,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Verify release version
-        run: node scripts/release.mjs verify $env:GITHUB_REF_NAME
+        shell: bash
+        run: node scripts/release.mjs verify "$GITHUB_REF_NAME"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -33,18 +48,46 @@ jobs:
       - name: Test
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
-      - name: Build NSIS installer
+      - name: Build installer
         env:
           JOKERDECK_UPDATE_MANIFEST_URL: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
-        run: pnpm tauri build --bundles nsis
+        run: pnpm tauri build --bundles ${{ matrix.bundle }}
+
+      - name: Stage installer
+        shell: pwsh
+        run: |
+          $bundleDir = "src-tauri/target/release/bundle/${{ matrix.bundle }}"
+          $installers = @(Get-ChildItem -LiteralPath $bundleDir -Filter '*.${{ matrix.extension }}' -File)
+          if ($installers.Count -ne 1) { throw "Expected one ${{ matrix.bundle }} installer, found $($installers.Count)" }
+          New-Item -ItemType Directory -Path release | Out-Null
+          Copy-Item -LiteralPath $installers[0].FullName -Destination "release/jokerdeck_$($env:GITHUB_REF_NAME)_${{ matrix.platform }}.${{ matrix.extension }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*'
+          path: release
+          merge-multiple: true
+
+      - name: Create update manifest
+        run: node scripts/release.mjs manifest "$GITHUB_REF_NAME" release
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          $installers = @(Get-ChildItem -LiteralPath src-tauri/target/release/bundle/nsis -Filter '*.exe' -File)
-          if ($installers.Count -ne 1) { throw "Expected one NSIS installer, found $($installers.Count)" }
-          node scripts/release.mjs manifest $env:GITHUB_REF_NAME $installers[0].FullName
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh release create $env:GITHUB_REF_NAME $installers[0].FullName latest.json --verify-tag --title $env:GITHUB_REF_NAME --generate-notes --latest
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: gh release create "$GITHUB_REF_NAME" release/* latest.json --verify-tag --title "$GITHUB_REF_NAME" --generate-notes --latest
