@@ -1,0 +1,16 @@
+# deps / build output
+node_modules/
+dist/
+# rust
+src-tauri/target/
+src-tauri/gen/
+# packaged releases
+*.exe
+*.msi
+*.dmg
+*.app/
+*.zip
+*.tar
+*.tar.gz
+# local secrets that might leak in during dev
+*.local
