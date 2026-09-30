@@ -148,7 +148,7 @@ pub fn save_store(app_dir: &std::path::Path, store: &Store) -> anyhow::Result<()
     };
     #[cfg(not(target_os = "macos"))]
     let stored = store;
-    let bytes = crate::secret_store::protect(&serde_json::to_vec(stored)?, false)?;
+    let bytes = crate::secret_store::protect(&serde_json::to_vec(&stored)?, false)?;
     let temporary = app_dir.join("store.tmp");
     std::fs::write(&temporary, bytes)?;
     std::fs::rename(temporary, store_path(app_dir))?;
