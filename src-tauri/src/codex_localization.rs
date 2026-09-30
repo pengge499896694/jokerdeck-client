@@ -81,7 +81,10 @@ async fn download_verified(http: &reqwest::Client, root: &Path) -> Result<()> {
         bail!("汉化包下载地址异常");
     }
     let response = http.get(url).send().await?.error_for_status()?;
-    if response.content_length().is_some_and(|size| size > MAX_ARCHIVE as u64) {
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_ARCHIVE as u64)
+    {
         bail!("汉化包超出大小限制");
     }
     let bytes = response.bytes().await?;
@@ -130,7 +133,8 @@ try {
 } finally { $zip.Dispose() }
 "#;
     let mut command = tokio::process::Command::new("powershell.exe");
-    command.args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+    command
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
         .env("CODEX_ZH_ARCHIVE", archive)
         .env("CODEX_ZH_ROOT", root)
         .env("CODEX_ZH_DIGEST", digest)
@@ -139,14 +143,24 @@ try {
     command.creation_flags(0x0800_0000);
     let output = tokio::time::timeout(Duration::from_secs(60), command.output()).await??;
     if !output.status.success() {
-        bail!("汉化包校验或解压失败：{}", String::from_utf8_lossy(&output.stderr).trim());
+        bail!(
+            "汉化包校验或解压失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
     Ok(())
 }
 
 async fn execute(script: &Path, args: &[&str]) -> Result<String> {
     let mut command = tokio::process::Command::new("powershell.exe");
-    command.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+    command
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
         .arg(script)
         .args(args)
         .kill_on_drop(true);
@@ -175,8 +189,10 @@ mod tests {
     #[test]
     fn rejects_unknown_action_without_network_or_filesystem_changes() {
         let http = reqwest::Client::new();
-        let result = tokio::runtime::Runtime::new().unwrap()
-            .block_on(run(Path::new("."), &http, "delete"));
+        let result =
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(run(Path::new("."), &http, "delete"));
         assert!(result.is_err());
     }
 }
