@@ -1,7 +1,8 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use serde::Serialize;
 use serde_json::Value;
+use tokio::io::AsyncWriteExt;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const RELAY_MANIFEST: &str = "https://sub2api.186-244-245-198.sslip.io/client/latest.json";
@@ -25,6 +26,12 @@ pub struct UpdateInfo {
     pub error: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct InstallUpdateResult {
+    pub ok: bool,
+    pub message: String,
+}
+
 pub async fn check(http: &reqwest::Client, manifest_url: &str) -> UpdateInfo {
     let mut last_error = None;
     for source in manifest_sources(manifest_url) {
@@ -41,6 +48,113 @@ pub async fn check(http: &reqwest::Client, manifest_url: &str) -> UpdateInfo {
         notes: None,
         error: last_error.map(|error| format!("所有更新源均不可用：{error}")),
     }
+}
+
+pub async fn download_and_install(
+    http: &reqwest::Client,
+    app_dir: &Path,
+    raw_url: &str,
+) -> Result<InstallUpdateResult, String> {
+    let url = reqwest::Url::parse(raw_url).map_err(|_| "更新地址无效".to_string())?;
+    if url.scheme() != "https"
+        || !matches!(
+            url.host_str(),
+            Some("sub2api.186-244-245-198.sslip.io") | Some("jokerdeck.cc.cd") | Some("github.com")
+        )
+    {
+        return Err("更新地址不是受信任的中转或官方发布地址".into());
+    }
+    let filename = url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .filter(|name| !name.is_empty() && name.len() <= 128)
+        .ok_or_else(|| "更新地址缺少安装包文件名".to_string())?
+        .to_string();
+    let extension = Path::new(&filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    #[cfg(windows)]
+    if extension != "exe" {
+        return Err("Windows 更新包格式错误".into());
+    }
+    #[cfg(target_os = "macos")]
+    if extension != "dmg" {
+        return Err("macOS 更新包格式错误".into());
+    }
+    let max_size: u64 = 300 * 1024 * 1024;
+    let response = http
+        .get(url)
+        .timeout(Duration::from_secs(900))
+        .send()
+        .await
+        .map_err(|error| format!("下载更新失败：{error}"))?
+        .error_for_status()
+        .map_err(|error| format!("更新服务器返回错误：{error}"))?;
+    if response
+        .content_length()
+        .is_some_and(|size| size > max_size)
+    {
+        return Err("更新包超过 300 MB 限制".into());
+    }
+    let directory = app_dir.join("updates");
+    tokio::fs::create_dir_all(&directory)
+        .await
+        .map_err(|error| format!("创建更新目录失败：{error}"))?;
+    let target = directory.join(&filename);
+    let temporary = target.with_extension(format!("{extension}.download"));
+    let mut file = tokio::fs::File::create(&temporary)
+        .await
+        .map_err(|error| format!("创建临时更新文件失败：{error}"))?;
+    let mut stream = response.bytes_stream();
+    let mut total = 0u64;
+    while let Some(chunk) = futures_util::StreamExt::next(&mut stream).await {
+        let chunk = chunk.map_err(|error| format!("下载更新中断：{error}"))?;
+        total = total.saturating_add(chunk.len() as u64);
+        if total > max_size {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err("更新包超过 300 MB 限制".into());
+        }
+        file.write_all(&chunk)
+            .await
+            .map_err(|error| format!("写入更新包失败：{error}"))?;
+    }
+    file.flush()
+        .await
+        .map_err(|error| format!("保存更新包失败：{error}"))?;
+    drop(file);
+    tokio::fs::rename(&temporary, &target)
+        .await
+        .map_err(|error| format!("准备安装更新失败：{error}"))?;
+    launch_installer(&target).map_err(|error| {
+        let _ = std::fs::remove_file(&target);
+        error
+    })?;
+    Ok(InstallUpdateResult {
+        ok: true,
+        message: format!("更新包已下载，正在启动安装器：{filename}"),
+    })
+}
+
+fn launch_installer(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new(path)
+            .spawn()
+            .map_err(|error| format!("启动 Windows 安装器失败：{error}"))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|error| format!("打开 macOS 安装包失败：{error}"))?;
+        return Ok(());
+    }
+    #[allow(unreachable_code)]
+    Err("当前平台暂不支持自动安装更新".into())
 }
 
 fn manifest_sources(primary: &str) -> Vec<&str> {

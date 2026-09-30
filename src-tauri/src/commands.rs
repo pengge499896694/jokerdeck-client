@@ -1321,6 +1321,17 @@ pub async fn check_update(state: State<'_, SharedState>) -> CmdResult<updater::U
     Ok(updater::check(&state.http, &url).await)
 }
 
+#[tauri::command]
+pub async fn install_update(
+    state: State<'_, SharedState>,
+    url: String,
+) -> CmdResult<updater::InstallUpdateResult> {
+    let state = state.inner().clone();
+    updater::download_and_install(&state.http, &state.app_dir, &url)
+        .await
+        .map_err(Into::into)
+}
+
 #[derive(Serialize)]
 pub struct Bootstrap {
     pub logged_in: bool,

@@ -113,6 +113,14 @@ export default function App() {
     try { await api.quitApp(true); }
     catch (err) { flash(message(err)); setClosing(false); }
   };
+  const installUpdate = async () => {
+    if (!update?.url) return;
+    try {
+      const result = await api.installUpdate(update.url);
+      setUpdate(null);
+      flash(result.message);
+    } catch (err) { flash(message(err)); }
+  };
   const refreshBoot = async () => {
     const result = await api.bootstrap();
     setBoot(result.logged_in ? { ...result, saved_password: undefined } : result);
@@ -272,9 +280,8 @@ export default function App() {
       aria-labelledby="update-title"><h2 id="update-title">发现新版本 v{update.latest}</h2>
       <p className="update-notes">{update.notes || "新版本已发布，请更新客户端。"}</p>
       <div className="row wrap"><button className="btn" onClick={() => setUpdate(null)}>稍后</button>
-        <button className="btn primary" disabled={!update.url} onClick={() => {
-          if (update.url) api.openUrl(update.url).catch((err) => flash(message(err)));
-        }}><Download size={16} />下载更新</button></div>
+        <button className="btn primary" disabled={!update.url} onClick={installUpdate}>
+          <Download size={16} />下载并安装</button></div>
     </div></div>}
   </div>;
 }

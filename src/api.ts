@@ -227,6 +227,7 @@ export const api = {
     call<string>("codex_localization", { action }),
   diagnostics: () => call<DiagReport>("run_diagnostics"),
   checkUpdate: () => call<UpdateInfo>("check_update"),
+  installUpdate: (url: string) => call<{ ok: boolean; message: string }>("install_update", { url }),
   openUrl: (url: string) => call<void>("open_url", { url }),
   openDevtools: () => call<void>("open_devtools"),
   openSite: (page: string) => call<void>("open_site", { page }),

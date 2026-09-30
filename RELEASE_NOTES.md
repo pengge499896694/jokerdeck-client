@@ -1,5 +1,7 @@
 更新内容：
 
+- 更新下载改为客户端直接从中转服务器下载并启动本地安装器，避免用户侧直连 GitHub。
+- Windows 使用 NSIS 安装包，macOS 使用 DMG 安装包。
 - 新增 Node.js 自动安装：Windows 使用 winget，macOS 使用 Homebrew。
 - 新增 Codex Desktop 一键重启，支持 Windows 和 macOS。
 - 新增 Codex Desktop 一键汉化、启动汉化版和恢复英文功能。

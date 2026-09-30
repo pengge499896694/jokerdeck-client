@@ -159,6 +159,7 @@ pub fn run() {
             commands::codex_localization,
             commands::run_diagnostics,
             commands::check_update,
+            commands::install_update,
             commands::get_bootstrap,
             commands::open_url,
             commands::open_devtools,
