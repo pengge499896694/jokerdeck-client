@@ -6,6 +6,8 @@ const VERSION: &str = "v0.1.2";
 const ASSET: &str = "codex-zh-CN-v0.1.2.zip";
 const RELEASE_API: &str = "https://api.github.com/repos/xqnode/codex-zh-CN/releases/tags/v0.1.2";
 const MAX_ARCHIVE: usize = 12 * 1024 * 1024;
+const LOCALIZATION_MANIFEST_PATH: &str = "/client/codex-localization/latest.json";
+const LOCALIZATION_DOWNLOAD_PATH: &str = "/client/codex-localization/download";
 
 #[derive(Deserialize)]
 struct Release {
@@ -53,15 +55,7 @@ fn find_file(root: &Path, suffix: &str) -> Option<std::path::PathBuf> {
 }
 
 async fn download_verified(http: &reqwest::Client, root: &Path) -> Result<()> {
-    let release: Release = http
-        .get(RELEASE_API)
-        .header("User-Agent", "jokerdeck-desktop")
-        .send()
-        .await?
-        .error_for_status()
-        .context("无法获取汉化包版本信息")?
-        .json()
-        .await?;
+    let (release, preferred_asset_url) = fetch_release(http).await?;
     let asset = release
         .assets
         .iter()
@@ -76,27 +70,137 @@ async fn download_verified(http: &reqwest::Client, root: &Path) -> Result<()> {
     if asset.size == 0 || asset.size > MAX_ARCHIVE {
         bail!("汉化包大小异常");
     }
-    let url = reqwest::Url::parse(&asset.browser_download_url)?;
-    if url.scheme() != "https" || url.host_str() != Some("github.com") {
-        bail!("汉化包下载地址异常");
-    }
-    let response = http.get(url).send().await?.error_for_status()?;
-    if response
-        .content_length()
-        .is_some_and(|size| size > MAX_ARCHIVE as u64)
-    {
-        bail!("汉化包超出大小限制");
-    }
-    let bytes = response.bytes().await?;
-    if bytes.len() != asset.size || bytes.len() > MAX_ARCHIVE {
-        bail!("汉化包下载不完整");
-    }
+    let bytes = download_asset(http, asset, preferred_asset_url.as_deref()).await?;
     std::fs::create_dir_all(root)?;
     let archive = root.join(ASSET);
     std::fs::write(&archive, bytes)?;
     let result = verify_and_unpack(&archive, root, digest).await;
     let _ = std::fs::remove_file(&archive);
     result
+}
+
+async fn fetch_release(http: &reqwest::Client) -> Result<(Release, Option<String>)> {
+    let mut last_error = None;
+    for source in release_sources() {
+        match http
+            .get(&source)
+            .header("User-Agent", "jokerdeck-desktop")
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => match response.json::<Release>().await {
+                    Ok(release) => {
+                        let asset_url = release
+                            .assets
+                            .iter()
+                            .find(|asset| asset.name == ASSET)
+                            .map(|asset| asset.browser_download_url.clone());
+                        if asset_url.is_some() {
+                            return Ok((release, asset_url));
+                        }
+                        last_error = Some(format!("{source}: 发行版缺少预期的汉化包"));
+                    }
+                    Err(error) => last_error = Some(format!("{source}: {error}")),
+                },
+                Err(error) => last_error = Some(format!("{source}: {error}")),
+            },
+            Err(error) => last_error = Some(format!("{source}: {error}")),
+        }
+    }
+    Err(anyhow!(
+        "无法获取汉化包版本信息{}",
+        last_error
+            .map(|error| format!("：{error}"))
+            .unwrap_or_default()
+    ))
+}
+
+fn release_sources() -> Vec<String> {
+    let mut sources = crate::state::DEFAULT_HOSTS
+        .iter()
+        .map(|host| format!("{host}{LOCALIZATION_MANIFEST_PATH}"))
+        .collect::<Vec<_>>();
+    sources.push(RELEASE_API.to_string());
+    sources
+}
+
+async fn download_asset(
+    http: &reqwest::Client,
+    asset: &Asset,
+    preferred_url: Option<&str>,
+) -> Result<bytes::Bytes> {
+    let mut urls = relay_asset_urls();
+    if let Some(url) = preferred_url.filter(|url| is_github_release_url(url)) {
+        urls.push(url.to_string());
+    }
+
+    let mut last_error = None;
+    for raw_url in urls {
+        let url = match reqwest::Url::parse(&raw_url) {
+            Ok(url) => url,
+            Err(error) => {
+                last_error = Some(format!("{raw_url}: {error}"));
+                continue;
+            }
+        };
+        match http
+            .get(url)
+            .header("User-Agent", "jokerdeck-desktop")
+            .timeout(Duration::from_secs(120))
+            .send()
+            .await
+        {
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => {
+                    if response
+                        .content_length()
+                        .is_some_and(|size| size > MAX_ARCHIVE as u64)
+                    {
+                        last_error = Some(format!("{raw_url}: 文件超过大小限制"));
+                        continue;
+                    }
+                    match response.bytes().await {
+                        Ok(bytes) if bytes.len() == asset.size && bytes.len() <= MAX_ARCHIVE => {
+                            return Ok(bytes);
+                        }
+                        Ok(bytes) => {
+                            last_error = Some(format!(
+                                "{raw_url}: 下载大小异常（期望 {}，实际 {}）",
+                                asset.size,
+                                bytes.len()
+                            ));
+                        }
+                        Err(error) => last_error = Some(format!("{raw_url}: {error}")),
+                    }
+                }
+                Err(error) => last_error = Some(format!("{raw_url}: {error}")),
+            },
+            Err(error) => last_error = Some(format!("{raw_url}: {error}")),
+        }
+    }
+    Err(anyhow!(
+        "汉化包下载失败{}",
+        last_error
+            .map(|error| format!("：{error}"))
+            .unwrap_or_default()
+    ))
+}
+
+fn relay_asset_urls() -> Vec<String> {
+    crate::state::DEFAULT_HOSTS
+        .iter()
+        .map(|host| format!("{host}{LOCALIZATION_DOWNLOAD_PATH}/{ASSET}"))
+        .collect()
+}
+
+fn is_github_release_url(raw_url: &str) -> bool {
+    reqwest::Url::parse(raw_url).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host_str() == Some("github.com")
+            && url.path().contains("/releases/download/")
+    })
 }
 
 async fn verify_and_unpack(archive: &Path, root: &Path, digest: &str) -> Result<()> {
@@ -194,5 +298,26 @@ mod tests {
                 .unwrap()
                 .block_on(run(Path::new("."), &http, "delete"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn only_accepts_github_release_urls_as_last_resort() {
+        assert!(is_github_release_url(
+            "https://github.com/xqnode/codex-zh-CN/releases/download/v0.1.2/codex-zh-CN-v0.1.2.zip"
+        ));
+        assert!(!is_github_release_url(
+            "https://example.com/codex-zh-CN-v0.1.2.zip"
+        ));
+        assert!(!is_github_release_url(
+            "http://github.com/xqnode/codex-zh-CN/releases/download/v0.1.2/codex-zh-CN-v0.1.2.zip"
+        ));
+    }
+
+    #[test]
+    fn relay_download_urls_are_generated_for_all_builtin_hosts() {
+        let urls = relay_asset_urls();
+        assert_eq!(urls.len(), crate::state::DEFAULT_HOSTS.len());
+        assert!(urls.iter().all(|url| url.ends_with(ASSET)));
+        assert!(urls.iter().all(|url| !url.contains("github.com")));
     }
 }
