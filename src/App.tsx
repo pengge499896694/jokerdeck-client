@@ -5,13 +5,13 @@ import {
   ArrowRight, Check, ChevronRight, CircleHelp, Download, Eye, EyeOff,
   KeyRound, LayoutDashboard, LogOut, Maximize2, Minimize2, Minus, Monitor, RefreshCw, CreditCard,
   ChartNoAxesCombined, Store,
-  Settings2, ShieldCheck, Stethoscope, UserRound, Wallet, X, Power, RotateCcw,
+  Settings2, ShieldCheck, Stethoscope, UserRound, Wallet, X, Power, RotateCcw, Bell, Users, Folder, Globe, Receipt, SlidersHorizontal,
 } from "lucide-react";
 import { api, isPreview, type Bootstrap, type UserInfo, type ProxyStatus, type CliReport,
   type DiagReport, type PlazaGroup, type ApplyResult, type PublicAuthSettings,
-  type GroupModels, type ModelProbe, type ToolConfigView } from "./api";
+  type GroupModels, type ModelProbe, type ToolConfigView, type UpdateInfo } from "./api";
 
-type SiteTab = typeof siteTabs[number]["id"];
+type SiteTab = typeof allSiteTabs[number]["id"];
 type Tab = "setup" | "tools" | "account" | SiteTab;
 type AuthPage = "register" | "forgot-password" | "reset-password";
 const logo = new URL("../icon-source.png", import.meta.url).href;
@@ -28,9 +28,26 @@ const siteTabs = [
   { id: "subscriptions", title: "我的订阅", icon: CreditCard },
   { id: "store", title: "店铺销售", icon: Store },
   { id: "profile", title: "账户与安全", icon: UserRound },
+  { id: "balance-notifications", title: "余额邮箱提醒", icon: Bell },
+  { id: "purchase", title: "在线充值", icon: Wallet },
 ] as const;
+const adminTabs = [
+  { id: "admin-dashboard", title: "管理概览", icon: LayoutDashboard },
+  { id: "admin-users", title: "用户管理", icon: Users },
+  { id: "admin-groups", title: "分组管理", icon: Folder },
+  { id: "admin-channels", title: "渠道管理", icon: Globe },
+  { id: "admin-accounts", title: "上游账户", icon: KeyRound },
+  { id: "admin-subscriptions", title: "订阅管理", icon: CreditCard },
+  { id: "admin-orders", title: "支付订单", icon: Receipt },
+  { id: "admin-redeem", title: "兑换码", icon: KeyRound },
+  { id: "admin-usage", title: "用量记录", icon: ChartNoAxesCombined },
+  { id: "admin-feedback", title: "用户反馈", icon: Bell },
+  { id: "admin-settings", title: "系统设置", icon: SlidersHorizontal },
+] as const;
+const financeTab = { id: "finance", title: "财务中心", icon: ChartNoAxesCombined } as const;
+const allSiteTabs = [...siteTabs, ...adminTabs, financeTab];
 
-function TitleBar({ flash }: { flash: (text: string) => void }) {
+function TitleBar({ flash, onClose }: { flash: (text: string) => void; onClose: () => void }) {
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
     if (isPreview) return;
@@ -53,13 +70,13 @@ function TitleBar({ flash }: { flash: (text: string) => void }) {
     <span className="titlebar-brand"><img src={logo} alt="" />jokerdeck</span>
     <span className="titlebar-status">{isPreview ? "界面预览" : "客户端"}</span>
     {!isPreview && <div className="window-controls">
-      <button className="icon-button window-control" title="最小化" aria-label="最小化"
-        onClick={() => getCurrentWindow().minimize().catch((err) => flash(message(err)))}><Minus size={17} /></button>
+      <button className="icon-button window-control" title="最小化到托盘" aria-label="最小化到托盘"
+        onClick={() => getCurrentWindow().hide().catch((err) => flash(message(err)))}><Minus size={17} /></button>
       <button className="icon-button window-control" title={maximized ? "还原窗口" : "最大化"}
         aria-label={maximized ? "还原窗口" : "最大化"} onClick={toggleMaximize}>
         {maximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>
       <button className="icon-button window-control close" title="关闭窗口" aria-label="关闭窗口"
-        onClick={() => getCurrentWindow().close().catch((err) => flash(message(err)))}><X size={17} /></button>
+        onClick={onClose}><X size={17} /></button>
     </div>}
   </header>;
 }
@@ -74,12 +91,27 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("setup");
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+  const [closePrompt, setClosePrompt] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const siteArea = useRef<HTMLDivElement>(null);
   const timer = useRef<number>();
   const flash = (text: string) => {
     setToast(text);
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => setToast(""), 6500);
+  };
+  const requestClose = async () => {
+    if (closing) return;
+    try {
+      if ((await api.proxyStatus()).running) setClosePrompt(true);
+      else await api.quitApp(false);
+    } catch (err) { flash(message(err)); }
+  };
+  const confirmClose = async () => {
+    setClosing(true);
+    try { await api.quitApp(true); }
+    catch (err) { flash(message(err)); setClosing(false); }
   };
   const refreshBoot = async () => {
     const result = await api.bootstrap();
@@ -93,6 +125,8 @@ export default function App() {
     let disposed = false;
     const unlisteners: (() => void)[] = [];
     listen<string>("host-switched", (event) => flash(`线路已切换至 ${event.payload}`))
+      .then((off) => disposed ? off() : unlisteners.push(off)).catch(() => {});
+    listen("request-quit", () => { void requestClose(); })
       .then((off) => disposed ? off() : unlisteners.push(off)).catch(() => {});
     return () => { disposed = true; unlisteners.forEach((off) => off()); window.clearTimeout(timer.current); };
   }, []);
@@ -116,7 +150,7 @@ export default function App() {
       window.removeEventListener("keydown", shortcut, true);
     };
   }, []);
-  const siteTab = siteTabs.find((item) => item.id === tab);
+  const siteTab = allSiteTabs.find((item) => item.id === tab);
   useEffect(() => {
     if (!user || !siteTab || isPreview) {
       if (!isPreview) api.hideSite().catch(() => {});
@@ -148,9 +182,7 @@ export default function App() {
   useEffect(() => {
     if (!user || isPreview) return;
     api.checkUpdate().then((update) => {
-      if (update.update_available) {
-        flash(update.latest ? `发现新版本 v${update.latest}，请到“账户中心”下载安装` : "发现新版本，请到“账户中心”下载安装");
-      }
+      if (update.update_available) setUpdate(update);
     }).catch(() => {});
   }, [user?.id]);
   const loggedIn = async (next: UserInfo) => {
@@ -184,7 +216,7 @@ export default function App() {
     } catch (err) { flash(message(err)); }
   };
   return <div className="app">
-    <TitleBar flash={flash} />
+    <TitleBar flash={flash} onClose={requestClose} />
     {!ready ? <main className="loading">加载中...</main> : !user ? authPage ?
       <AuthForm key={authPage} page={authPage} onBack={returnToLogin} onLogin={loggedIn} onResetLink={useResetLink}
         resetLink={resetLink} setResetLink={setResetLink} resetCredentials={resetCredentials} flash={flash} /> :
@@ -200,6 +232,17 @@ export default function App() {
           <nav className="site-nav">{siteTabs.map(({ id, title, icon: Icon }) =>
             <button key={id} className={`nav-link ${tab === id ? "active" : ""}`} title={title} onClick={() => setTab(id)}>
               <Icon size={18} /><span>{title}</span>{tab === id && <ChevronRight size={15} />}</button>)}</nav>
+          {(user.role === "admin" || user.role === "finance") && <>
+            <span className="nav-label site-nav-label">财务</span>
+            <nav><button className={`nav-link ${tab === financeTab.id ? "active" : ""}`}
+              onClick={() => setTab(financeTab.id)}><ChartNoAxesCombined size={18} /><span>财务中心</span></button></nav>
+          </>}
+          {user.role === "admin" && <>
+            <span className="nav-label site-nav-label">管理</span>
+            <nav>{adminTabs.map(({ id, title, icon: Icon }) => <button key={id}
+              className={`nav-link ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
+              <Icon size={18} /><span>{title}</span>{tab === id && <ChevronRight size={15} />}</button>)}</nav>
+          </>}
           <div className="sidebar-bottom">
             <div className="sidebar-user"><span className="avatar"><UserRound size={18} /></span>
               <span className="user-email" title={user.email}>{user.email}</span>
@@ -214,11 +257,25 @@ export default function App() {
           {tab === "setup" &&
             <Setup user={user} setUser={setUser} boot={boot} refreshBoot={refreshBoot} flash={flash} />}
           {tab === "tools" && <Tools boot={boot} flash={flash} goSetup={() => setTab("setup")} />}
-          {tab === "account" && <Account user={user} version={boot?.version} flash={flash} />}
+          {tab === "account" && <Account user={user} version={boot?.version} flash={flash} onUpdate={setUpdate} />}
           </>}
         </main>
       </div>}
     {toast && <div className="toast" role="status">{toast}</div>}
+    {closePrompt && <div className="dialog-backdrop"><div className="dialog" role="alertdialog" aria-modal="true"
+      aria-labelledby="close-title"><h2 id="close-title">代理仍在运行</h2>
+      <p>请先关闭代理并恢复配置。确认后将自动恢复 Claude Code / Codex 配置、停止代理，再关闭客户端。</p>
+      <div className="row wrap"><button className="btn" disabled={closing} onClick={() => setClosePrompt(false)}>取消</button>
+        <button className="btn primary" disabled={closing} onClick={confirmClose}>{closing ? "处理中..." : "确认并退出"}</button></div>
+    </div></div>}
+    {update && <div className="dialog-backdrop"><div className="dialog" role="dialog" aria-modal="true"
+      aria-labelledby="update-title"><h2 id="update-title">发现新版本 v{update.latest}</h2>
+      <p className="update-notes">{update.notes || "新版本已发布，请更新客户端。"}</p>
+      <div className="row wrap"><button className="btn" onClick={() => setUpdate(null)}>稍后</button>
+        <button className="btn primary" disabled={!update.url} onClick={() => {
+          if (update.url) api.openUrl(update.url).catch((err) => flash(message(err)));
+        }}><Download size={16} />下载更新</button></div>
+    </div></div>}
   </div>;
 }
 
@@ -298,7 +355,7 @@ function Login({ boot, onLogin, onAuthPage, initialError }: {
         : <button className="text-button" onClick={() => onAuthPage("register")}>注册账户</button>}
         <button className="text-button" onClick={() => onAuthPage("forgot-password")}>重置密码</button></div>
     </div>
-    <div className="login-footer"><ShieldCheck size={15} />Windows 安全加密存储 <span>v{boot?.version ?? "0.1.0"}</span></div>
+    <div className="login-footer"><ShieldCheck size={15} />系统安全存储 <span>v{boot?.version ?? "0.1.0"}</span></div>
   </main>;
 }
 
@@ -630,7 +687,8 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
       <div className="field"><label htmlFor="group">分组</label><select id="group" className="input" value={groupId ?? ""}
         disabled={busy || loading} onChange={(event) => selectGroup(Number(event.target.value))}>
         <option value="" disabled>{loading ? "加载中..." : "选择分组"}</option>
-        {groups.map((item) => <option key={item.id} value={item.id}>{item.name}{item.multiplier != null ? ` · ${item.multiplier}x` : ""}</option>)}</select></div>
+        {groups.map((item) => <option key={item.id} value={item.id}>{item.name}
+          {item.is_exclusive ? " · 专属" : ""}{item.multiplier != null ? ` · ${item.multiplier}x` : ""}</option>)}</select></div>
       {group && <div className="selection-summary"><span>{group.name}</span><span className={`tag ${applied ? "success" : "warning"}`}>
         {applied ? "代理当前分组" : "待应用"}</span>{group.description && <small>{group.description}</small>}</div>}
       {!loading && !groups.length && !error && <div className="alert warning">没有可配置分组，请在中转站检查授权或订阅。</div>}
@@ -664,7 +722,7 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
       </div>
     </section>
     <section className="section">
-      <div className="section-header"><h2>应用配置</h2><span className="tag">Windows</span></div>
+      <div className="section-header"><h2>应用配置</h2><span className="tag">桌面端</span></div>
       <p className="muted">自动创建或复用当前分组的 Key，配置支持的工具与模型。</p>
       {error && <div className="alert error" role="alert">{error}</div>}
       {result && <div className="alert success"><Check size={17} />配置已应用{codex && "，Codex 模型目录已同步"}。
@@ -761,8 +819,8 @@ function Tools({ boot, flash, goSetup }: { boot: Bootstrap | null; flash: (text:
   </>;
 }
 
-function Account({ user, version, flash }: {
-  user: UserInfo; version?: string; flash: (text: string) => void;
+function Account({ user, version, flash, onUpdate }: {
+  user: UserInfo; version?: string; flash: (text: string) => void; onUpdate: (update: UpdateInfo) => void;
 }) {
   return <>
     <section className="section"><div className="section-header"><h2>账户信息</h2><UserRound size={18} /></div>
@@ -772,7 +830,10 @@ function Account({ user, version, flash }: {
     </section>
     <section className="section"><div className="section-header"><h2>支持</h2><CircleHelp size={18} /></div>
       <button className="btn" onClick={() => api.checkUpdate().then((update) => {
-        if (update.update_available && update.url) return api.openUrl(update.url);
+        if (update.update_available) {
+          onUpdate(update);
+          return;
+        }
         flash(update.error ?? "暂无可用更新");
       }).catch((err) => flash(message(err)))}><RefreshCw size={16} />检查更新</button>
     </section>

@@ -25,6 +25,11 @@ button { color: inherit; }
 .icon-button:hover { color: var(--brand); background: #f0fdfa; }
 .close { height: 40px; width: 44px; border-radius: 0; }
 .close:hover { background: #ef4444; color: white; }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: #11182799; }
+.dialog { width: min(440px, 100%); padding: 24px; background: white; border-radius: 8px; box-shadow: 0 16px 48px #11182733; }
+.dialog p { line-height: 1.7; color: #4b5563; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dialog .row { justify-content: flex-end; margin-top: 20px; }
+.update-notes { max-height: 220px; overflow-y: auto; }
 .workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 204px minmax(0,1fr); }
 .sidebar { display: flex; flex-direction: column; background: white; border-right: 1px solid var(--border); padding: 22px 12px 12px; min-width: 0; overflow-y: auto; scrollbar-width: none; }
 .sidebar::-webkit-scrollbar { display: none; }

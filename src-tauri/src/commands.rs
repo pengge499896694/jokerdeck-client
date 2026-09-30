@@ -341,6 +341,20 @@ fn site_path(page: &str) -> CmdResult<&'static str> {
         "subscriptions" => Ok("/subscriptions"),
         "store" => Ok("/store"),
         "profile" => Ok("/profile"),
+        "balance-notifications" => Ok("/balance-notifications"),
+        "purchase" => Ok("/purchase"),
+        "finance" => Ok("/finance"),
+        "admin-dashboard" => Ok("/admin/dashboard"),
+        "admin-users" => Ok("/admin/users"),
+        "admin-groups" => Ok("/admin/groups"),
+        "admin-channels" => Ok("/admin/channels"),
+        "admin-accounts" => Ok("/admin/accounts"),
+        "admin-subscriptions" => Ok("/admin/subscriptions"),
+        "admin-orders" => Ok("/admin/orders"),
+        "admin-redeem" => Ok("/admin/redeem"),
+        "admin-settings" => Ok("/admin/settings"),
+        "admin-usage" => Ok("/admin/usage"),
+        "admin-feedback" => Ok("/admin/feedback"),
         _ => Err("不支持的站点页面".into()),
     }
 }
@@ -383,6 +397,12 @@ pub async fn show_site(
     let _guard = state.configuration_lock.lock().await;
     let session = state.session.read().await;
     let session = session.as_ref().ok_or("请先登录")?;
+    if page.starts_with("admin-") && session.user.role != "admin" {
+        return Err("需要管理员权限".into());
+    }
+    if page == "finance" && !matches!(session.user.role.as_str(), "admin" | "finance") {
+        return Err("需要财务权限".into());
+    }
     // Browser storage is isolated by origin. Keep every embedded page on one
     // trusted site even when API requests fail over between relay lines.
     let origin = reqwest::Url::parse(SITE_HOST).map_err(e)?;
@@ -1054,6 +1074,10 @@ pub async fn restore_config(state: State<'_, SharedState>) -> CmdResult<RestoreC
     }
     let state = state.inner().clone();
     let _guard = state.configuration_lock.lock().await;
+    restore_config_inner(&state).await
+}
+
+async fn restore_config_inner(state: &AppState) -> CmdResult<RestoreConfigResult> {
     let restored = config_writer::restore_configs().map_err(e)?;
     if !restored.files.is_empty() {
         let mut store = state.store.write().await;
@@ -1084,6 +1108,26 @@ pub async fn restore_config(state: State<'_, SharedState>) -> CmdResult<RestoreC
         warnings: restored.warnings,
         status,
     })
+}
+
+#[tauri::command]
+pub async fn quit_app(
+    state: State<'_, SharedState>,
+    app: AppHandle,
+    restore: bool,
+) -> CmdResult<()> {
+    let state = state.inner().clone();
+    let _guard = state.configuration_lock.lock().await;
+    if restore {
+        let result = restore_config_inner(&state).await?;
+        if !result.warnings.is_empty() {
+            return Err(format!("配置未完全恢复：{}", result.warnings.join("；")));
+        }
+    } else if state.proxy.read().await.running {
+        return Err("请先关闭代理并恢复配置".into());
+    }
+    app.exit(0);
+    Ok(())
 }
 
 /// Run before login as well as after login, giving the UI an immediate line
@@ -1283,6 +1327,7 @@ pub async fn get_bootstrap(state: State<'_, SharedState>) -> CmdResult<Bootstrap
         (session.is_some(), session.as_ref().map(|s| s.user.clone()))
     };
     let store = state.store.read().await;
+    let saved_password = saved_login_password(&store);
     Ok(Bootstrap {
         logged_in,
         last_email: store.last_email.clone(),
@@ -1293,8 +1338,8 @@ pub async fn get_bootstrap(state: State<'_, SharedState>) -> CmdResult<Bootstrap
         codex_model: store.settings.codex_model.clone(),
         computer_use: store.settings.computer_use,
         auto_fallback: store.settings.auto_fallback,
-        saved_password: store.saved_password.clone(),
-        remember_password: store.saved_password.is_some(),
+        remember_password: saved_password.is_some(),
+        saved_password,
         site_url: store.hosts.first().cloned().unwrap_or_default(),
         desktop_supported: !cfg!(target_os = "android"),
     })
@@ -1307,14 +1352,36 @@ pub async fn save_login(
     password: String,
     remember: bool,
 ) -> CmdResult<()> {
-    if remember && !cfg!(windows) {
+    if remember && !cfg!(any(windows, target_os = "macos")) {
         return Err("当前平台暂不支持安全保存密码".into());
     }
     let state = state.inner();
     let mut store = state.store.write().await;
-    store.last_email = Some(email.trim().to_string());
+    let email = email.trim();
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(previous) = store.last_email.as_deref() {
+            if previous != email || !remember {
+                crate::secret_store::remove_password(previous).map_err(e)?;
+            }
+        }
+        if remember {
+            crate::secret_store::save_password(email, &password).map_err(e)?;
+        }
+    }
+    store.last_email = Some(email.to_string());
     store.saved_password = if remember { Some(password) } else { None };
     save_store(&state.app_dir, &store).map_err(e)
+}
+
+fn saved_login_password(store: &crate::state::Store) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    return store
+        .last_email
+        .as_deref()
+        .and_then(crate::secret_store::load_password);
+    #[cfg(not(target_os = "macos"))]
+    return store.saved_password.clone();
 }
 
 #[tauri::command]
@@ -1343,6 +1410,10 @@ pub async fn open_site(
 pub async fn forget_password(state: State<'_, SharedState>) -> CmdResult<()> {
     let state = state.inner();
     let mut store = state.store.write().await;
+    #[cfg(target_os = "macos")]
+    if let Some(email) = store.last_email.as_deref() {
+        crate::secret_store::remove_password(email).map_err(e)?;
+    }
     store.saved_password = None;
     save_store(&state.app_dir, &store).map_err(e)
 }
@@ -1366,6 +1437,10 @@ pub async fn set_site_url(state: State<'_, SharedState>, url: String) -> CmdResu
     let _guard = state.configuration_lock.lock().await;
     let mut store = state.store.write().await;
     if store.hosts.first() != Some(&host) {
+        #[cfg(target_os = "macos")]
+        if let Some(email) = store.last_email.as_deref() {
+            crate::secret_store::remove_password(email).map_err(e)?;
+        }
         store.hosts = vec![host];
         store.group_keys.clear();
         store.refresh_token = None;

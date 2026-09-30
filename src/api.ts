@@ -75,6 +75,7 @@ export interface PlazaGroup {
   platform: string;
   description: string;
   multiplier?: number;
+  is_exclusive?: boolean;
   models: PlazaModel[];
 }
 
@@ -214,6 +215,7 @@ export const api = {
   proxyStatus: () => call<ProxyStatus>("proxy_status"),
   stopProxy: () => call<ProxyStatus>("stop_proxy"),
   restoreConfig: () => call<RestoreConfigResult>("restore_config"),
+  quitApp: (restore: boolean) => call<void>("quit_app", { restore }),
   probeHosts: () => call<HostHealth[]>("probe_hosts"),
   setPreferredHost: (host?: string) => call<ProxyStatus>("set_preferred_host", { host }),
   setAutoFallback: (enabled: boolean) => call<void>("set_auto_fallback", { enabled }),

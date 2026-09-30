@@ -56,6 +56,7 @@ impl Default for Settings {
 }
 
 /// Windows persists this entire store using user-scoped DPAPI.
+/// macOS passwords live only in Keychain, never in this JSON store.
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Store {
     #[serde(default)]
@@ -140,7 +141,14 @@ pub fn load_store(app_dir: &std::path::Path) -> anyhow::Result<Store> {
 
 pub fn save_store(app_dir: &std::path::Path, store: &Store) -> anyhow::Result<()> {
     std::fs::create_dir_all(app_dir)?;
-    let bytes = crate::secret_store::protect(&serde_json::to_vec(store)?, false)?;
+    #[cfg(target_os = "macos")]
+    let stored = Store {
+        saved_password: None,
+        ..store.clone()
+    };
+    #[cfg(not(target_os = "macos"))]
+    let stored = store;
+    let bytes = crate::secret_store::protect(&serde_json::to_vec(stored)?, false)?;
     let temporary = app_dir.join("store.tmp");
     std::fs::write(&temporary, bytes)?;
     std::fs::rename(temporary, store_path(app_dir))?;

@@ -52,6 +52,31 @@ pub fn protect(data: &[u8], _decrypt: bool) -> Result<Vec<u8>> {
     Ok(data.to_vec())
 }
 
+#[cfg(target_os = "macos")]
+fn entry(email: &str) -> Result<keyring::Entry> {
+    Ok(keyring::Entry::new("cc.jokerdeck.client", email)?)
+}
+
+#[cfg(target_os = "macos")]
+pub fn save_password(email: &str, password: &str) -> Result<()> {
+    entry(email)?.set_password(password)?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn load_password(email: &str) -> Option<String> {
+    entry(email).ok()?.get_password().ok()
+}
+
+#[cfg(target_os = "macos")]
+pub fn remove_password(email: &str) -> Result<()> {
+    let credential = entry(email)?;
+    match credential.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     #[test]

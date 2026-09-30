@@ -52,6 +52,7 @@ if (command === "verify") {
   );
   writeFileSync(new URL("latest.json", root), `${JSON.stringify({
     version,
+    notes: readFileSync(new URL("RELEASE_NOTES.md", root), "utf8").trim(),
     platforms,
   }, null, 2)}\n`);
   console.log("Created latest.json");

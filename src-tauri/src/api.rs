@@ -423,6 +423,7 @@ pub struct PlazaGroup {
     pub description: String,
     /// The multiplier the user actually pays (user-specific rate wins).
     pub multiplier: Option<f64>,
+    pub is_exclusive: bool,
     pub models: Vec<PlazaModel>,
 }
 
@@ -485,6 +486,10 @@ pub async fn fetch_plaza(
                     .get("user_rate_multiplier")
                     .and_then(Value::as_f64)
                     .or_else(|| g.get("rate_multiplier").and_then(Value::as_f64)),
+                is_exclusive: g
+                    .get("is_exclusive")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
                 models,
             })
         })
