@@ -222,6 +222,8 @@ export const api = {
   setExtensions: (computer_use: boolean) => call<void>("set_extensions", { computerUse: computer_use }),
   detectClis: () => call<CliReport>("detect_clis"),
   installCli: (which: string) => call<InstallResult>("install_cli", { which }),
+  codexLocalization: (action: "install" | "uninstall" | "launch") =>
+    call<string>("codex_localization", { action }),
   diagnostics: () => call<DiagReport>("run_diagnostics"),
   checkUpdate: () => call<UpdateInfo>("check_update"),
   openUrl: (url: string) => call<void>("open_url", { url }),

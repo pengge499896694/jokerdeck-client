@@ -1,5 +1,6 @@
 mod api;
 mod cli_manager;
+mod codex_localization;
 mod commands;
 mod config_writer;
 mod diagnostics;
@@ -148,6 +149,7 @@ pub fn run() {
             commands::set_extensions,
             commands::detect_clis,
             commands::install_cli,
+            commands::codex_localization,
             commands::run_diagnostics,
             commands::check_update,
             commands::get_bootstrap,

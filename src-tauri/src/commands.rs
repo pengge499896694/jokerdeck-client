@@ -1282,6 +1282,20 @@ pub async fn install_cli(which: String) -> CmdResult<InstallResult> {
 }
 
 #[tauri::command]
+pub async fn codex_localization(
+    state: State<'_, SharedState>,
+    action: String,
+) -> CmdResult<String> {
+    if !cfg!(windows) {
+        return Err("Codex Desktop 界面汉化目前仅支持 Windows".into());
+    }
+    let _guard = state.configuration_lock.lock().await;
+    crate::codex_localization::run(&state.app_dir, &state.http, &action)
+        .await
+        .map_err(e)
+}
+
+#[tauri::command]
 pub async fn run_diagnostics(state: State<'_, SharedState>) -> CmdResult<diagnostics::DiagReport> {
     let state = state.inner().clone();
     Ok(diagnostics::run(&state).await)

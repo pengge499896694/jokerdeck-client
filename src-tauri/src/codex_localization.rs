@@ -1,0 +1,182 @@
+use anyhow::{anyhow, bail, Context, Result};
+use serde::Deserialize;
+use std::{path::Path, time::Duration};
+
+const VERSION: &str = "v0.1.2";
+const ASSET: &str = "codex-zh-CN-v0.1.2.zip";
+const RELEASE_API: &str = "https://api.github.com/repos/xqnode/codex-zh-CN/releases/tags/v0.1.2";
+const MAX_ARCHIVE: usize = 12 * 1024 * 1024;
+
+#[derive(Deserialize)]
+struct Release {
+    assets: Vec<Asset>,
+}
+
+#[derive(Deserialize)]
+struct Asset {
+    name: String,
+    browser_download_url: String,
+    digest: Option<String>,
+    size: usize,
+}
+
+pub async fn run(app_dir: &Path, http: &reqwest::Client, action: &str) -> Result<String> {
+    if !matches!(action, "install" | "uninstall" | "launch") {
+        bail!("未知的 Codex 汉化操作");
+    }
+    let root = app_dir.join(format!("codex-zh-CN-{VERSION}"));
+    let launcher = find_file(&root, "launch-codex-zh-cn.ps1");
+    if action == "launch" {
+        let script = launcher.ok_or_else(|| anyhow!("请先安装 Codex 汉化包"))?;
+        return execute(&script, &[]).await;
+    }
+    if action == "uninstall" {
+        let script = find_file(&root, "scripts/install_windows.ps1")
+            .ok_or_else(|| anyhow!("未找到本客户端安装的汉化包，无法恢复英文"))?;
+        return execute(&script, &["-Action", "uninstall", "-NoPause"]).await;
+    }
+
+    // Always verify a fresh release before executing its scripts; never trust a stale cache.
+    download_verified(http, &root).await?;
+    let script = find_file(&root, "scripts/install_windows.ps1")
+        .ok_or_else(|| anyhow!("汉化包缺少安装脚本"))?;
+    execute(&script, &["-Action", action, "-NoPause"]).await
+}
+
+fn find_file(root: &Path, suffix: &str) -> Option<std::path::PathBuf> {
+    let direct = root.join(suffix);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let nested = root.join(format!("codex-zh-CN-{VERSION}")).join(suffix);
+    nested.is_file().then_some(nested)
+}
+
+async fn download_verified(http: &reqwest::Client, root: &Path) -> Result<()> {
+    let release: Release = http
+        .get(RELEASE_API)
+        .header("User-Agent", "jokerdeck-desktop")
+        .send()
+        .await?
+        .error_for_status()
+        .context("无法获取汉化包版本信息")?
+        .json()
+        .await?;
+    let asset = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == ASSET)
+        .ok_or_else(|| anyhow!("发行版缺少预期的汉化包"))?;
+    let digest = asset
+        .digest
+        .as_deref()
+        .and_then(|s| s.strip_prefix("sha256:"))
+        .filter(|s| s.len() == 64 && s.bytes().all(|c| c.is_ascii_hexdigit()))
+        .ok_or_else(|| anyhow!("发行包没有可校验的 SHA-256，已停止安装"))?;
+    if asset.size == 0 || asset.size > MAX_ARCHIVE {
+        bail!("汉化包大小异常");
+    }
+    let url = reqwest::Url::parse(&asset.browser_download_url)?;
+    if url.scheme() != "https" || url.host_str() != Some("github.com") {
+        bail!("汉化包下载地址异常");
+    }
+    let response = http.get(url).send().await?.error_for_status()?;
+    if response.content_length().is_some_and(|size| size > MAX_ARCHIVE as u64) {
+        bail!("汉化包超出大小限制");
+    }
+    let bytes = response.bytes().await?;
+    if bytes.len() != asset.size || bytes.len() > MAX_ARCHIVE {
+        bail!("汉化包下载不完整");
+    }
+    std::fs::create_dir_all(root)?;
+    let archive = root.join(ASSET);
+    std::fs::write(&archive, bytes)?;
+    let result = verify_and_unpack(&archive, root, digest).await;
+    let _ = std::fs::remove_file(&archive);
+    result
+}
+
+async fn verify_and_unpack(archive: &Path, root: &Path, digest: &str) -> Result<()> {
+    const SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$hash = (Get-FileHash -LiteralPath $env:CODEX_ZH_ARCHIVE -Algorithm SHA256).Hash
+if ($hash -ne $env:CODEX_ZH_DIGEST) { throw '汉化包 SHA-256 校验失败' }
+Add-Type -AssemblyName System.IO.Compression
+$zip = [System.IO.Compression.ZipFile]::OpenRead($env:CODEX_ZH_ARCHIVE)
+try {
+    if ($zip.Entries.Count -gt 150) { throw '汉化包文件数量异常' }
+    $base = [System.IO.Path]::GetFullPath($env:CODEX_ZH_ROOT).TrimEnd('\') + '\'
+    $total = [long]0
+    foreach ($entry in $zip.Entries) {
+        $total += $entry.Length
+        if ($total -gt 33554432) { throw '汉化包解压大小异常' }
+        $target = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($base, $entry.FullName))
+        if (-not $target.StartsWith($base, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw '汉化包包含非法路径'
+        }
+        if ((($entry.ExternalAttributes -shr 16) -band 0xF000) -eq 0xA000) {
+            throw '汉化包包含符号链接'
+        }
+    }
+    foreach ($entry in $zip.Entries) {
+        $target = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($base, $entry.FullName))
+        if ($entry.FullName.EndsWith('/')) {
+            [System.IO.Directory]::CreateDirectory($target) | Out-Null
+        } else {
+            [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($target)) | Out-Null
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+        }
+    }
+} finally { $zip.Dispose() }
+"#;
+    let mut command = tokio::process::Command::new("powershell.exe");
+    command.args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env("CODEX_ZH_ARCHIVE", archive)
+        .env("CODEX_ZH_ROOT", root)
+        .env("CODEX_ZH_DIGEST", digest)
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    let output = tokio::time::timeout(Duration::from_secs(60), command.output()).await??;
+    if !output.status.success() {
+        bail!("汉化包校验或解压失败：{}", String::from_utf8_lossy(&output.stderr).trim());
+    }
+    Ok(())
+}
+
+async fn execute(script: &Path, args: &[&str]) -> Result<String> {
+    let mut command = tokio::process::Command::new("powershell.exe");
+    command.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(script)
+        .args(args)
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    let output = tokio::time::timeout(Duration::from_secs(180), command.output())
+        .await
+        .context("汉化操作超时")??;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        bail!("汉化操作失败：{}", error.trim());
+    }
+    Ok(match args.first().copied() {
+        Some("-Action") if args.get(1) == Some(&"install") =>
+            "安装已启动。若弹出 UAC，请授权；Codex 可能被关闭并重新启动。Store 版日常请使用下方“启动汉化版”。".into(),
+        Some("-Action") =>
+            "恢复操作已启动。若弹出 UAC，请授权；完成后重新打开 Codex。".into(),
+        _ => "已启动 Codex 汉化版。".into(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_unknown_action_without_network_or_filesystem_changes() {
+        let http = reqwest::Client::new();
+        let result = tokio::runtime::Runtime::new().unwrap()
+            .block_on(run(Path::new("."), &http, "delete"));
+        assert!(result.is_err());
+    }
+}

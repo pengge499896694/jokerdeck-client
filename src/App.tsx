@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowRight, Check, ChevronRight, CircleHelp, Download, Eye, EyeOff,
   KeyRound, LayoutDashboard, LogOut, Maximize2, Minimize2, Minus, Monitor, RefreshCw, CreditCard,
-  ChartNoAxesCombined, Store,
+  ChartNoAxesCombined, Store, Languages,
   Settings2, ShieldCheck, Stethoscope, UserRound, Wallet, X, Power, RotateCcw, Bell, Users, Folder, Globe, Receipt, SlidersHorizontal,
 } from "lucide-react";
 import { api, isPreview, type Bootstrap, type UserInfo, type ProxyStatus, type CliReport,
@@ -795,6 +795,14 @@ function Tools({ boot, flash, goSetup }: { boot: Bootstrap | null; flash: (text:
     try { setDiag(await api.diagnostics()); } catch (err) { flash(message(err)); }
     finally { setBusy(""); }
   };
+  const localize = async (action: "install" | "uninstall" | "launch") => {
+    if (action === "uninstall" && !window.confirm("恢复 Codex Desktop 英文界面？汉化补丁会从本机移除。")) return;
+    setBusy(`locale-${action}`);
+    setLog(action === "install" ? "正在下载并校验汉化包..." : "正在处理 Codex 汉化...");
+    try { setLog(await api.codexLocalization(action)); }
+    catch (err) { setLog(message(err)); }
+    finally { setBusy(""); }
+  };
   return <>
     <section className="section"><div className="section-header"><h2>工具安装</h2><button className="icon-button" title="重新检测" aria-label="重新检测"
       disabled={!!busy} onClick={detect}><RefreshCw size={17} className={busy === "detect" ? "spin" : ""} /></button></div>
@@ -807,6 +815,18 @@ function Tools({ boot, flash, goSetup }: { boot: Bootstrap | null; flash: (text:
           onClick={() => which === "desktop" ? api.openUrl("https://developers.openai.com/codex/app").catch((err) => flash(message(err))) : install(which)}>
           <Download size={14} />{which === "desktop" ? "下载" : busy === which ? "安装中..." : "安装"}</button> : <span className="tag warning">缺失</span>}</div>)}
       {log && <pre className="log">{log}</pre>}
+    </section>
+    <section className="section"><div className="section-header"><h2>Codex Desktop 汉化</h2></div>
+      <p className="subtext">非官方中文补丁（xqnode/codex-zh-CN v0.1.2），会备份并修改 Codex Desktop 本地资源。可能需要管理员授权；Codex 更新后可能需要重新汉化。仅支持 Windows。</p>
+      <div className="row wrap">
+        <button className="btn primary" disabled={!!busy || !report?.codex_desktop.installed || !report?.node.installed || boot?.desktop_supported === false}
+          onClick={() => localize("install")}><Languages size={16} />{busy === "locale-install" ? "汉化中..." : "一键汉化 Codex"}</button>
+        <button className="btn" disabled={!!busy || boot?.desktop_supported === false} onClick={() => localize("launch")}>
+          <Monitor size={16} />启动汉化版</button>
+        <button className="btn" disabled={!!busy || boot?.desktop_supported === false} onClick={() => localize("uninstall")}>
+          <RotateCcw size={16} />恢复英文</button>
+      </div>
+      {!report?.node.installed && <small className="subtext">需先安装 Node.js。</small>}
     </section>
     <section className="section"><div className="section-header"><h2>诊断与修复</h2><Stethoscope size={18} /></div>
       <div className="row wrap"><button className="btn primary" disabled={!!busy || boot?.desktop_supported === false} onClick={diagnose}>
