@@ -795,6 +795,15 @@ function Tools({ boot, flash, goSetup }: { boot: Bootstrap | null; flash: (text:
     try { setDiag(await api.diagnostics()); } catch (err) { flash(message(err)); }
     finally { setBusy(""); }
   };
+  const restartCodex = async () => {
+    setBusy("restart-codex"); setLog("正在重启 Codex Desktop...");
+    try {
+      const result = await api.restartCodex();
+      setLog(result.log || (result.ok ? "Codex Desktop 已重启" : "Codex Desktop 重启失败"));
+      if (!result.ok) flash(result.log || "Codex Desktop 重启失败");
+    } catch (err) { setLog(message(err)); }
+    finally { setBusy(""); }
+  };
   const localize = async (action: "install" | "uninstall" | "launch") => {
     if (action === "uninstall" && !window.confirm("恢复 Codex Desktop 英文界面？汉化补丁会从本机移除。")) return;
     setBusy(`locale-${action}`);
@@ -815,6 +824,13 @@ function Tools({ boot, flash, goSetup }: { boot: Bootstrap | null; flash: (text:
           onClick={() => which === "desktop" ? api.openUrl("https://developers.openai.com/codex/app").catch((err) => flash(message(err))) : install(which)}>
           <Download size={14} />{which === "desktop" ? "下载" : busy === which ? "安装中..." : "安装"}</button> : <span className="tag warning">缺失</span>}</div>)}
       {log && <pre className="log">{log}</pre>}
+    </section>
+    <section className="section"><div className="section-header"><h2>Codex Desktop</h2><Monitor size={18} /></div>
+      <div className="row wrap">
+        <button className="btn" disabled={!!busy || !report?.codex_desktop.installed || boot?.desktop_supported === false}
+          onClick={restartCodex}><RefreshCw size={16} className={busy === "restart-codex" ? "spin" : ""} />
+          {busy === "restart-codex" ? "重启中..." : "一键重启 Codex"}</button>
+      </div>
     </section>
     <section className="section"><div className="section-header"><h2>Codex Desktop 汉化</h2></div>
       <p className="subtext">非官方中文补丁（xqnode/codex-zh-CN v0.1.2），会备份并修改 Codex Desktop 本地资源。可能需要管理员授权；Codex 更新后可能需要重新汉化。仅支持 Windows。</p>

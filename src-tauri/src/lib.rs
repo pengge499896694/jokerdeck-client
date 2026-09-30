@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use tauri::{Emitter, Manager};
 
-use state::{load_store, AppState, DEFAULT_HOSTS};
+use state::{load_store, save_store, AppState, DEFAULT_HOSTS, SITE_HOST};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -42,6 +42,12 @@ pub fn run() {
                 .is_some_and(|host| !store.hosts.contains(host))
             {
                 store.settings.preferred_host = None;
+            }
+            // New installations and legacy installs without an explicit
+            // preference start from the sub-prefixed relay domain.
+            if store.settings.preferred_host.is_none() {
+                store.settings.preferred_host = Some(SITE_HOST.to_string());
+                let _ = save_store(&app_dir, &store);
             }
 
             let proxy = proxy::shared_with(store.hosts.clone(), store.settings.auto_fallback);
@@ -149,6 +155,7 @@ pub fn run() {
             commands::set_extensions,
             commands::detect_clis,
             commands::install_cli,
+            commands::restart_codex,
             commands::codex_localization,
             commands::run_diagnostics,
             commands::check_update,

@@ -1282,6 +1282,12 @@ pub async fn install_cli(which: String) -> CmdResult<InstallResult> {
 }
 
 #[tauri::command]
+pub async fn restart_codex() -> CmdResult<InstallResult> {
+    let (ok, log) = cli_manager::restart_codex().await;
+    Ok(InstallResult { ok, log })
+}
+
+#[tauri::command]
 pub async fn codex_localization(
     state: State<'_, SharedState>,
     action: String,

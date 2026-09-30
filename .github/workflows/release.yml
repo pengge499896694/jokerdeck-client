@@ -50,7 +50,7 @@ jobs:
 
       - name: Build installer
         env:
-          JOKERDECK_UPDATE_MANIFEST_URL: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+          JOKERDECK_UPDATE_MANIFEST_URL: https://sub2api.186-244-245-198.sslip.io/client/latest.json
         run: pnpm tauri build --bundles ${{ matrix.bundle }}
 
       - name: Stage installer

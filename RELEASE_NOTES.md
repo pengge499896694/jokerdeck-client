@@ -1,5 +1,7 @@
 更新内容：
 
+- 新增 Node.js 自动安装：Windows 使用 winget，macOS 使用 Homebrew。
+- 新增 Codex Desktop 一键重启，支持 Windows 和 macOS。
 - 新增 Codex Desktop 一键汉化、启动汉化版和恢复英文功能。
 - 汉化包下载支持 SHA-256 校验，解压过程增加路径、大小和符号链接安全检查。
 - 工具与修复页新增 Codex 汉化操作与风险提示。

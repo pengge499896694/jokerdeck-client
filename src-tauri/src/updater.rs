@@ -4,11 +4,15 @@ use serde::Serialize;
 use serde_json::Value;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-/// The release workflow injects the GitHub Release asset URL at build time.
-/// Local builds keep the relay-hosted manifest as a backwards-compatible fallback.
+pub const RELAY_MANIFEST: &str = "https://sub2api.186-244-245-198.sslip.io/client/latest.json";
+pub const RELAY_MANIFEST_FALLBACK: &str = "https://jokerdeck.cc.cd/client/latest.json";
+pub const GITHUB_MANIFEST: &str =
+    "https://github.com/pengge499896694/jokerdeck-client/releases/latest/download/latest.json";
+/// The release workflow may inject a preferred manifest URL at build time.
+/// Runtime fallbacks remain available when that source is blocked.
 pub const DEFAULT_MANIFEST: &str = match option_env!("JOKERDECK_UPDATE_MANIFEST_URL") {
     Some(url) => url,
-    None => "https://jokerdeck.cc.cd/client/latest.json",
+    None => RELAY_MANIFEST,
 };
 
 #[derive(Serialize)]
@@ -22,64 +26,87 @@ pub struct UpdateInfo {
 }
 
 pub async fn check(http: &reqwest::Client, manifest_url: &str) -> UpdateInfo {
-    let mut info = UpdateInfo {
+    let mut last_error = None;
+    for source in manifest_sources(manifest_url) {
+        match check_source(http, source).await {
+            Ok(info) => return info,
+            Err(error) => last_error = Some(format!("{source}: {error}")),
+        }
+    }
+    UpdateInfo {
         current: CURRENT_VERSION.into(),
         latest: None,
         update_available: false,
         url: None,
         notes: None,
-        error: None,
-    };
-    match http
-        .get(manifest_url)
+        error: last_error.map(|error| format!("所有更新源均不可用：{error}")),
+    }
+}
+
+fn manifest_sources(primary: &str) -> Vec<&str> {
+    let mut sources = Vec::new();
+    for source in [
+        primary,
+        RELAY_MANIFEST,
+        RELAY_MANIFEST_FALLBACK,
+        GITHUB_MANIFEST,
+    ] {
+        if !source.trim().is_empty() && !sources.contains(&source) {
+            sources.push(source);
+        }
+    }
+    sources
+}
+
+async fn check_source(http: &reqwest::Client, source: &str) -> Result<UpdateInfo, String> {
+    let response = http
+        .get(source)
         .timeout(Duration::from_secs(12))
         .send()
         .await
-    {
-        Ok(resp) => {
-            let status = resp.status();
-            match resp.text().await {
-                Ok(text) => match serde_json::from_str::<Value>(&text) {
-                    Ok(body) => {
-                        let v = body.get("data").unwrap_or(&body);
-                        let latest = v
-                            .get("version")
-                            .or_else(|| v.get("latest_version"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .trim()
-                            .to_string();
-                        info.url = platform_url(v)
-                            .or_else(|| {
-                                v.get("url")
-                                    .or_else(|| v.get("download_url"))
-                                    .and_then(Value::as_str)
-                            })
-                            .map(str::to_string);
-                        info.notes = v.get("notes").and_then(Value::as_str).map(str::to_string);
-                        if latest.is_empty() {
-                            info.error = Some("更新源未返回版本号".into());
-                        } else {
-                            info.update_available = is_newer(&latest, CURRENT_VERSION);
-                            info.latest = Some(latest);
-                        }
-                    }
-                    Err(_)
-                        if text.trim_start().starts_with("<!doctype")
-                            || text.trim_start().starts_with("<html") =>
-                    {
-                        info.error = Some("更新源暂未发布更新信息".into());
-                    }
-                    Err(err) => {
-                        info.error = Some(format!("更新信息格式无效（HTTP {status}）：{err}"));
-                    }
-                },
-                Err(err) => info.error = Some(format!("读取更新信息失败: {err}")),
-            }
+        .map_err(|error| format!("连接失败：{error}"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("读取失败：{error}"))?;
+    let body = serde_json::from_str::<Value>(&text).map_err(|error| {
+        if text.trim_start().starts_with("<!doctype") || text.trim_start().starts_with("<html") {
+            "服务端返回了网页而不是更新清单".to_string()
+        } else {
+            format!("更新信息格式无效（HTTP {status}）：{error}")
         }
-        Err(e) => info.error = Some(format!("检查更新失败: {e}")),
+    })?;
+    let body = body.get("data").unwrap_or(&body);
+    let latest = body
+        .get("version")
+        .or_else(|| body.get("latest_version"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if latest.is_empty() {
+        return Err("更新清单未返回版本号".into());
     }
-    info
+    let url = platform_url(body)
+        .or_else(|| {
+            body.get("url")
+                .or_else(|| body.get("download_url"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string)
+        .map(|url| mirror_asset_url(source, &url));
+    Ok(UpdateInfo {
+        current: CURRENT_VERSION.into(),
+        latest: Some(latest.clone()),
+        update_available: is_newer(&latest, CURRENT_VERSION),
+        url,
+        notes: body
+            .get("notes")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        error: None,
+    })
 }
 
 fn platform_url(manifest: &Value) -> Option<&str> {
@@ -87,6 +114,32 @@ fn platform_url(manifest: &Value) -> Option<&str> {
     let keys = target_keys();
     keys.iter()
         .find_map(|key| platforms.get(*key).and_then(asset_url))
+}
+
+fn mirror_asset_url(source: &str, asset: &str) -> String {
+    let Ok(source_url) = reqwest::Url::parse(source) else {
+        return asset.to_string();
+    };
+    let Ok(asset_url) = reqwest::Url::parse(asset) else {
+        return asset.to_string();
+    };
+    if source_url.path() == "/client/latest.json"
+        && asset_url.host_str() == Some("github.com")
+        && asset_url.path().contains("/releases/download/")
+    {
+        if let Some(filename) = asset_url
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+        {
+            return format!(
+                "{}://{}/client/download/{}",
+                source_url.scheme(),
+                source_url.host_str().unwrap_or_default(),
+                filename
+            );
+        }
+    }
+    asset.to_string()
 }
 
 fn asset_url(value: &Value) -> Option<&str> {
@@ -135,4 +188,35 @@ fn parse(v: &str) -> Vec<u64> {
                 .unwrap_or(0)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_sources_are_unique_and_keep_relay_before_github() {
+        let sources = manifest_sources(RELAY_MANIFEST);
+        assert_eq!(sources.first(), Some(&RELAY_MANIFEST));
+        assert_eq!(sources.last(), Some(&GITHUB_MANIFEST));
+        assert_eq!(sources.len(), 3);
+    }
+
+    #[test]
+    fn relay_manifest_rewrites_github_release_asset_to_relay_download() {
+        let source = "https://sub2api.example/client/latest.json";
+        let asset = "https://github.com/pengge499896694/jokerdeck-client/releases/download/v0.1.4/jokerdeck_v0.1.4_windows-x86_64.exe";
+        assert_eq!(
+            mirror_asset_url(source, asset),
+            "https://sub2api.example/client/download/jokerdeck_v0.1.4_windows-x86_64.exe"
+        );
+    }
+
+    #[test]
+    fn direct_github_manifest_keeps_github_asset_url() {
+        let source = GITHUB_MANIFEST;
+        let asset =
+            "https://github.com/pengge499896694/jokerdeck-client/releases/download/v0.1.4/app.exe";
+        assert_eq!(mirror_asset_url(source, asset), asset);
+    }
 }

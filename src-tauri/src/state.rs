@@ -12,11 +12,11 @@ use crate::proxy::{ProxyRuntime, ProxyShared};
 /// All resolve to the same relay and are covered by its SAN cert; SNI is
 /// disabled on the HTTP client so GFW SNI-based RST can't block them.
 pub const DEFAULT_HOSTS: &[&str] = &[
+    "https://sub2api.186-244-245-198.sslip.io",
     "https://jokerdeck.cc.cd",
     "https://jokerdeck.de5.net",
     "https://jokere.duckdns.org",
     "https://api.jokere.asia",
-    "https://sub2api.186-244-245-198.sslip.io",
 ];
 pub const SITE_HOST: &str = "https://sub2api.186-244-245-198.sslip.io";
 

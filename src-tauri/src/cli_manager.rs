@@ -112,10 +112,23 @@ async fn detect_codex_desktop() -> CliStatus {
             }
         }
     }
+    #[cfg(target_os = "macos")]
+    {
+        for path in ["/Applications/Codex.app", "/System/Applications/Codex.app"] {
+            if std::path::Path::new(path).exists() {
+                return CliStatus {
+                    installed: true,
+                    version: None,
+                    path: Some(path.into()),
+                };
+            }
+        }
+    }
     CliStatus::default()
 }
 
-/// Install a CLI. `claude`/`codex` go through npm; `node` uses winget on Windows.
+/// Install a CLI. `claude`/`codex` go through npm; Node uses the native
+/// package manager for the current desktop platform.
 pub async fn install(which_cli: &str) -> (bool, String) {
     match which_cli {
         "claude" => sh("npm i -g @anthropic-ai/claude-code").await,
@@ -124,10 +137,28 @@ pub async fn install(which_cli: &str) -> (bool, String) {
         "node" => {
             if cfg!(windows) {
                 sh("winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements").await
+            } else if cfg!(target_os = "macos") {
+                let (brew_ok, brew) = sh("command -v brew").await;
+                if brew_ok && !brew.is_empty() {
+                    let brew = brew.lines().next().unwrap_or("brew").trim();
+                    sh(&format!("\"{brew}\" install node")).await
+                } else {
+                    sh("NONINTERACTIVE=1 /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\" && eval \"$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)\" && brew install node").await
+                }
             } else {
-                (false, "请从 https://nodejs.org 安装 Node.js 后重试".into())
+                (false, "当前平台暂不支持自动安装 Node.js".into())
             }
         }
         other => (false, format!("未知的安装目标: {other}")),
     }
+}
+
+pub async fn restart_codex() -> (bool, String) {
+    if cfg!(windows) {
+        return sh(r#"powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; Stop-Process -Name Codex,CodexHelper -Force; Start-Sleep -Milliseconds 500; $app=Get-StartApps | Where-Object { $_.Name -match 'Codex' } | Select-Object -First 1; if ($app) { Start-Process ('shell:AppsFolder\' + $app.AppID) } else { $paths=@($env:LOCALAPPDATA + '\Programs\Codex\Codex.exe',$env:LOCALAPPDATA + '\Codex\Codex.exe'); $path=$paths | Where-Object { Test-Path $_ } | Select-Object -First 1; if (-not $path) { throw '未找到 Codex Desktop 启动入口' }; Start-Process $path }"#).await;
+    }
+    if cfg!(target_os = "macos") {
+        return sh("pkill -f '/Codex' >/dev/null 2>&1 || true; sleep 0.5; open -a Codex").await;
+    }
+    (false, "当前平台暂不支持一键重启 Codex Desktop".into())
 }
