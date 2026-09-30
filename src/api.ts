@@ -113,6 +113,25 @@ export interface InstallResult {
   log: string;
 }
 
+export interface CodexSession {
+  id: string;
+  title: string;
+  updated_at: number;
+  size: number;
+}
+export interface CodexSessionDetail {
+  messages: { role: "user" | "assistant"; text: string }[];
+  truncated: boolean;
+}
+export interface CodexEnhancementStatus {
+  plugins_enabled: boolean;
+  cache_available: boolean;
+  cache_registered: boolean;
+  cached_plugins: number;
+  model_catalog_active: boolean;
+  model_count: number;
+}
+
 export interface DiagItem {
   name: string;
   ok: boolean;
@@ -225,6 +244,12 @@ export const api = {
   restartCodex: () => call<InstallResult>("restart_codex"),
   codexLocalization: (action: "install" | "uninstall" | "launch") =>
     call<string>("codex_localization", { action }),
+  codexSessions: () => call<CodexSession[]>("list_codex_sessions"),
+  codexSession: (id: string) => call<CodexSessionDetail>("read_codex_session", { id }),
+  deleteCodexSession: (id: string) => call<void>("delete_codex_session", { id }),
+  codexEnhancementStatus: () => call<CodexEnhancementStatus>("codex_enhancement_status"),
+  enableCodexMarketplace: () => call<string>("enable_codex_marketplace"),
+  registerCodexPluginCache: () => call<string>("register_codex_plugin_cache"),
   diagnostics: () => call<DiagReport>("run_diagnostics"),
   checkUpdate: () => call<UpdateInfo>("check_update"),
   installUpdate: (url: string) => call<{ ok: boolean; message: string }>("install_update", { url }),

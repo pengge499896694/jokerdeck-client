@@ -4,21 +4,24 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowRight, Check, ChevronRight, CircleHelp, Download, Eye, EyeOff,
   KeyRound, LayoutDashboard, LogOut, Maximize2, Minimize2, Minus, Monitor, RefreshCw, CreditCard,
-  ChartNoAxesCombined, Store, Languages,
+  ChartNoAxesCombined, Store, Languages, History, Search, Sparkles, Trash2,
   Settings2, ShieldCheck, Stethoscope, UserRound, Wallet, X, Power, RotateCcw, Bell, Users, Folder, Globe, Receipt, SlidersHorizontal,
 } from "lucide-react";
 import { api, isPreview, type Bootstrap, type UserInfo, type ProxyStatus, type CliReport,
   type DiagReport, type PlazaGroup, type ApplyResult, type PublicAuthSettings,
-  type GroupModels, type ModelProbe, type ToolConfigView, type UpdateInfo } from "./api";
+  type GroupModels, type ModelProbe, type ToolConfigView, type UpdateInfo,
+  type CodexSession, type CodexSessionDetail, type CodexEnhancementStatus } from "./api";
 
 type SiteTab = typeof allSiteTabs[number]["id"];
-type Tab = "setup" | "tools" | "account" | SiteTab;
+type Tab = "setup" | "tools" | "sessions" | "enhance" | "account" | SiteTab;
 type AuthPage = "register" | "forgot-password" | "reset-password";
 const logo = new URL("../icon-source.png", import.meta.url).href;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const tabs = [
   { id: "setup", title: "控制台", icon: LayoutDashboard },
   { id: "tools", title: "工具与修复", icon: Stethoscope },
+  { id: "sessions", title: "会话管理", icon: History },
+  { id: "enhance", title: "Codex 增强", icon: Sparkles },
   { id: "account", title: "账户中心", icon: UserRound },
 ] as const;
 const siteTabs = [
@@ -94,6 +97,7 @@ export default function App() {
   const [closePrompt, setClosePrompt] = useState(false);
   const [closing, setClosing] = useState(false);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [restarting, setRestarting] = useState(false);
   const siteArea = useRef<HTMLDivElement>(null);
   const timer = useRef<number>();
   const flash = (text: string) => {
@@ -120,6 +124,15 @@ export default function App() {
       setUpdate(null);
       flash(result.message);
     } catch (err) { flash(message(err)); }
+  };
+  const restartCodex = async () => {
+    if (restarting) return;
+    setRestarting(true);
+    try {
+      const result = await api.restartCodex();
+      flash(result.ok ? "Codex Desktop 已重启" : result.log || "Codex Desktop 重启失败");
+    } catch (err) { flash(message(err)); }
+    finally { setRestarting(false); }
   };
   const refreshBoot = async () => {
     const result = await api.bootstrap();
@@ -261,10 +274,18 @@ export default function App() {
           {siteTab ? <div ref={siteArea} className="site-area" /> : <>
           <div className="page-header"><div><span className="breadcrumb">工作空间 / {tabs.find((item) => item.id === tab)?.title}</span>
             <h1>{tabs.find((item) => item.id === tab)?.title}</h1></div>
-            <button className="btn" onClick={() => setTab("store")}><Store size={16} />店铺销售</button></div>
+            <div className="row wrap">
+              {tab === "setup" && <button className="btn" disabled={restarting || boot?.desktop_supported === false}
+                onClick={restartCodex}><RefreshCw size={16} className={restarting ? "spin" : ""} />
+                {restarting ? "重启中..." : "一键重启 Codex"}</button>}
+              <button className="btn" onClick={() => setTab("store")}><Store size={16} />店铺销售</button>
+            </div></div>
           {tab === "setup" &&
             <Setup user={user} setUser={setUser} boot={boot} refreshBoot={refreshBoot} flash={flash} />}
           {tab === "tools" && <Tools boot={boot} flash={flash} goSetup={() => setTab("setup")} />}
+          {tab === "sessions" && <Sessions flash={flash} />}
+          {tab === "enhance" && <CodexEnhance boot={boot} flash={flash} goTools={() => setTab("tools")}
+            goSessions={() => setTab("sessions")} />}
           {tab === "account" && <Account user={user} version={boot?.version} flash={flash} onUpdate={setUpdate} />}
           </>}
         </main>
@@ -774,6 +795,129 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
         <span className="break">{host.host}</span>{status.active_host === host.host && <span className="tag success">当前</span>}
         {status.preferred_host === host.host && <span className="tag">优先</span>}</span>
         <small>{host.latency_ms != null ? `${host.latency_ms} ms` : "未检测"}</small></div>)}</section>
+  </>;
+}
+
+function Sessions({ flash }: { flash: (text: string) => void }) {
+  const [items, setItems] = useState<CodexSession[]>([]);
+  const [selected, setSelected] = useState("");
+  const [detail, setDetail] = useState<CodexSessionDetail | null>(null);
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const refresh = async () => {
+    setLoading(true);
+    try { setItems(await api.codexSessions()); }
+    catch (err) { flash(message(err)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void refresh(); }, []);
+  const select = async (id: string) => {
+    setSelected(id); setDetail(null); setReading(true);
+    try { setDetail(await api.codexSession(id)); }
+    catch (err) { flash(message(err)); }
+    finally { setReading(false); }
+  };
+  const filtered = items.filter((item) => `${item.title} ${item.id}`.toLowerCase().includes(query.toLowerCase()));
+  const remove = async () => {
+    const item = items.find((entry) => entry.id === selected);
+    if (!item || !window.confirm(`永久删除会话「${item.title}」？此操作无法撤销。`)) return;
+    setDeleting(true);
+    try {
+      await api.deleteCodexSession(item.id);
+      setItems((current) => current.filter((entry) => entry.id !== item.id));
+      setSelected(""); setDetail(null);
+      flash("会话已永久删除");
+    } catch (err) { flash(message(err)); }
+    finally { setDeleting(false); }
+  };
+  return <section className="section sessions-section">
+    <div className="section-header"><h2>最近 100 条本地会话</h2><button className="icon-button" title="刷新会话"
+      aria-label="刷新会话" disabled={loading} onClick={refresh}><RefreshCw size={17} className={loading ? "spin" : ""} /></button></div>
+    <div className="session-search"><Search size={17} /><input className="input" type="search"
+      placeholder="搜索标题或 ID" aria-label="搜索会话" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
+    <div className="sessions-layout">
+      <div className="session-list" aria-label="本地会话列表">
+        {filtered.map((item) => <button key={item.id} className={`session-item ${selected === item.id ? "active" : ""}`}
+          onClick={() => void select(item.id)}>
+          <strong>{item.title}</strong><small>{new Date(item.updated_at * 1000).toLocaleString()} · {(item.size / 1024).toFixed(0)} KB</small>
+        </button>)}
+        {!loading && !filtered.length && <p className="muted">{query ? "没有匹配的会话" : "没有本地会话"}</p>}
+      </div>
+      <div className="session-preview">
+        {reading ? <span className="muted">读取中...</span> : detail ? <>
+          <div className="session-actions"><button className="btn small" disabled={deleting}
+            onClick={remove}><Trash2 size={14} />{deleting ? "删除中..." : "删除会话"}</button></div>
+          {detail.truncated && <div className="alert warning">会话过长，仅显示已读取部分。</div>}
+          {detail.messages.length ? detail.messages.map((item, index) => <article className="session-message" key={index}>
+            <strong>{item.role === "user" ? "用户" : "Codex"}</strong><pre>{item.text}</pre>
+          </article>) : <span className="muted">没有可预览的消息</span>}
+        </> : <span className="muted">选择会话查看消息</span>}
+      </div>
+    </div>
+  </section>;
+}
+
+function CodexEnhance({ boot, flash, goTools, goSessions }: {
+  boot: Bootstrap | null; flash: (text: string) => void; goTools: () => void; goSessions: () => void;
+}) {
+  const [busy, setBusy] = useState("");
+  const [status, setStatus] = useState<CodexEnhancementStatus | null>(null);
+  const refresh = async () => {
+    try { setStatus(await api.codexEnhancementStatus()); }
+    catch (err) { flash(message(err)); }
+  };
+  useEffect(() => { void refresh(); }, []);
+  const action = async (name: string, run: () => Promise<string>) => {
+    setBusy(name);
+    try { flash(await run()); await refresh(); }
+    catch (err) { flash(message(err)); }
+    finally { setBusy(""); }
+  };
+  return <>
+    <section className="section"><div className="section-header"><h2>插件市场</h2>
+      <span className={`tag ${status?.plugins_enabled ? "success" : "warning"}`}>{status?.plugins_enabled ? "插件功能已启用" : "插件功能未启用"}</span></div>
+      <div className="row wrap">
+        <button className="btn" disabled={!!busy || status?.plugins_enabled || boot?.desktop_supported === false}
+          onClick={() => action("marketplace", api.enableCodexMarketplace)}><Sparkles size={16} />启用插件市场</button>
+      </div>
+      <small className="subtext">API Key 模式下的官方在线市场可能仍需 ChatGPT 登录；此操作不会绕过账号权限。</small>
+    </section>
+    <section className="section"><div className="section-header"><h2>模型白名单</h2>
+      <span className={`tag ${status?.model_catalog_active ? "success" : "warning"}`}>
+        {status?.model_catalog_active ? `已同步 ${status.model_count} 个模型` : "未同步"}</span></div>
+      <button className="btn" disabled={!!busy || !boot?.preferred_group_id || boot?.desktop_supported === false}
+        onClick={() => action("models", async () => {
+          await api.applyConfig(false, true, boot?.preferred_group_id, undefined, boot?.codex_model);
+          return "中转模型目录已同步到 Codex；重启后刷新模型选择列表";
+        })}><RefreshCw size={16} className={busy === "models" ? "spin" : ""} />同步中转模型</button>
+      {!boot?.preferred_group_id && <small className="subtext">请先在控制台选择分组并应用配置。</small>}
+    </section>
+    <section className="section"><div className="section-header"><h2>官方远端插件缓存</h2>
+      <span className={`tag ${status?.cache_registered ? "success" : "warning"}`}>
+        {status?.cache_registered ? `已注册 ${status.cached_plugins} 个` : status?.cache_available ? "待注册" : "本机无缓存"}</span></div>
+      <button className="btn" disabled={!!busy || !status?.cache_available || status.cache_registered || boot?.desktop_supported === false}
+        onClick={() => action("cache", api.registerCodexPluginCache)}>
+        <RefreshCw size={16} className={busy === "cache" ? "spin" : ""} />修复缓存注册</button>
+    </section>
+    <section className="section"><div className="section-header"><h2>会话</h2><History size={18} /></div>
+      <button className="btn" onClick={goSessions}><History size={16} />管理本地会话</button>
+    </section>
+    <section className="section"><div className="section-header"><h2>Codex Desktop</h2><Monitor size={18} /></div>
+      <div className="row wrap">
+        <button className="btn" disabled={!!busy || boot?.desktop_supported === false}
+          onClick={() => action("restart", async () => {
+            const result = await api.restartCodex();
+            if (!result.ok) throw new Error(result.log || "重启失败");
+            return "Codex Desktop 已重启";
+          })}><RefreshCw size={16} className={busy === "restart" ? "spin" : ""} />一键重启</button>
+        <button className="btn" disabled={!!busy || boot?.desktop_supported === false}
+          onClick={() => action("launch", () => api.codexLocalization("launch"))}>
+          <Monitor size={16} />启动汉化版</button>
+        <button className="btn" onClick={goTools}><Languages size={16} />汉化与修复</button>
+      </div>
+    </section>
   </>;
 }
 

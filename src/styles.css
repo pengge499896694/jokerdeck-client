@@ -117,6 +117,27 @@ select.input { padding-right: 26px; text-overflow: ellipsis; }
 .list-row:last-child { border-bottom: 0; }
 .list-row small { color: var(--muted); flex-shrink: 0; }
 .list-row strong { font-size: 13px; font-weight: 500; }
+.session-search { position: relative; max-width: 440px; margin-bottom: 18px; }
+.session-search svg { position: absolute; left: 12px; top: 12px; color: var(--muted); }
+.session-search .input { padding-left: 38px; }
+.sessions-layout { display: grid; grid-template-columns: minmax(210px, 34%) minmax(0, 1fr); border: 1px solid var(--border); background: white; min-height: 390px; height: min(65vh, 640px); }
+.session-list, .session-preview { overflow: auto; min-width: 0; }
+.session-list { border-right: 1px solid var(--border); }
+.session-list > .muted, .session-preview > .muted { display: block; padding: 16px; }
+.session-item { width: 100%; padding: 13px; border: 0; border-bottom: 1px solid var(--border); background: white; text-align: left; }
+.session-item:hover, .session-item.active { background: #f0fdfa; }
+.session-item strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.session-item small { display: block; margin-top: 6px; color: var(--muted); }
+.session-preview { padding: 16px; }
+.session-actions { display: flex; justify-content: flex-end; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.session-actions .btn { color: #b91c1c; }
+.session-message { border-bottom: 1px solid var(--border); padding: 10px 0 16px; }
+.session-message strong { font-size: 12px; color: #0f766e; }
+.session-message pre { font: inherit; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .sessions-layout { grid-template-columns: 1fr; grid-template-rows: 180px minmax(0, 1fr); }
+  .session-list { border-right: 0; border-bottom: 1px solid var(--border); }
+}
 .row { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .wrap { flex-wrap: wrap; }
 .break { overflow-wrap: anywhere; min-width: 0; }

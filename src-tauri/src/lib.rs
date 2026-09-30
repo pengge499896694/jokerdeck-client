@@ -1,6 +1,8 @@
 mod api;
 mod cli_manager;
+mod codex_enhancement;
 mod codex_localization;
+mod codex_sessions;
 mod commands;
 mod config_writer;
 mod diagnostics;
@@ -156,6 +158,12 @@ pub fn run() {
             commands::install_cli,
             commands::restart_codex,
             commands::codex_localization,
+            commands::list_codex_sessions,
+            commands::read_codex_session,
+            commands::delete_codex_session,
+            commands::codex_enhancement_status,
+            commands::enable_codex_marketplace,
+            commands::register_codex_plugin_cache,
             commands::run_diagnostics,
             commands::check_update,
             commands::install_update,

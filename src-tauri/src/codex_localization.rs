@@ -209,6 +209,7 @@ $ErrorActionPreference = 'Stop'
 $hash = (Get-FileHash -LiteralPath $env:CODEX_ZH_ARCHIVE -Algorithm SHA256).Hash
 if ($hash -ne $env:CODEX_ZH_DIGEST) { throw '汉化包 SHA-256 校验失败' }
 Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::OpenRead($env:CODEX_ZH_ARCHIVE)
 try {
     if ($zip.Entries.Count -gt 150) { throw '汉化包文件数量异常' }
@@ -249,7 +250,7 @@ try {
     if !output.status.success() {
         bail!(
             "汉化包校验或解压失败：{}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            decode_powershell_output(&output.stderr).trim()
         );
     }
     Ok(())
@@ -274,8 +275,10 @@ async fn execute(script: &Path, args: &[&str]) -> Result<String> {
         .await
         .context("汉化操作超时")??;
     if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
-        bail!("汉化操作失败：{}", error.trim());
+        bail!(
+            "汉化操作失败：{}",
+            decode_powershell_output(&output.stderr).trim()
+        );
     }
     Ok(match args.first().copied() {
         Some("-Action") if args.get(1) == Some(&"install") =>
@@ -284,6 +287,44 @@ async fn execute(script: &Path, args: &[&str]) -> Result<String> {
             "恢复操作已启动。若弹出 UAC，请授权；完成后重新打开 Codex。".into(),
         _ => "已启动 Codex 汉化版。".into(),
     })
+}
+
+fn decode_powershell_output(bytes: &[u8]) -> String {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Globalization::{GetACP, MultiByteToWideChar};
+        let codepage = unsafe { GetACP() };
+        let length = unsafe {
+            MultiByteToWideChar(
+                codepage,
+                0,
+                bytes.as_ptr(),
+                bytes.len() as i32,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if length > 0 {
+            let mut wide = vec![0u16; length as usize];
+            let written = unsafe {
+                MultiByteToWideChar(
+                    codepage,
+                    0,
+                    bytes.as_ptr(),
+                    bytes.len() as i32,
+                    wide.as_mut_ptr(),
+                    length,
+                )
+            };
+            if written > 0 {
+                return String::from_utf16_lossy(&wide[..written as usize]);
+            }
+        }
+    }
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 #[cfg(test)]

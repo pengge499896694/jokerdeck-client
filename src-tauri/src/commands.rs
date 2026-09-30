@@ -1302,6 +1302,53 @@ pub async fn codex_localization(
 }
 
 #[tauri::command]
+pub async fn list_codex_sessions() -> CmdResult<Vec<crate::codex_sessions::Session>> {
+    tokio::task::spawn_blocking(crate::codex_sessions::list)
+        .await
+        .map_err(e)?
+        .map_err(e)
+}
+
+#[tauri::command]
+pub async fn read_codex_session(id: String) -> CmdResult<crate::codex_sessions::SessionDetail> {
+    tokio::task::spawn_blocking(move || crate::codex_sessions::detail(&id))
+        .await
+        .map_err(e)?
+        .map_err(e)
+}
+
+#[tauri::command]
+pub async fn delete_codex_session(id: String) -> CmdResult<()> {
+    crate::codex_sessions::delete(&id).await.map_err(e)
+}
+
+#[tauri::command]
+pub async fn codex_enhancement_status() -> CmdResult<crate::codex_enhancement::Status> {
+    tokio::task::spawn_blocking(crate::codex_enhancement::status)
+        .await
+        .map_err(e)?
+        .map_err(e)
+}
+
+#[tauri::command]
+pub async fn enable_codex_marketplace(state: State<'_, SharedState>) -> CmdResult<String> {
+    let _guard = state.configuration_lock.lock().await;
+    tokio::task::spawn_blocking(crate::codex_enhancement::enable_marketplace)
+        .await
+        .map_err(e)?
+        .map_err(e)
+}
+
+#[tauri::command]
+pub async fn register_codex_plugin_cache(state: State<'_, SharedState>) -> CmdResult<String> {
+    let _guard = state.configuration_lock.lock().await;
+    tokio::task::spawn_blocking(crate::codex_enhancement::register_cache)
+        .await
+        .map_err(e)?
+        .map_err(e)
+}
+
+#[tauri::command]
 pub async fn run_diagnostics(state: State<'_, SharedState>) -> CmdResult<diagnostics::DiagReport> {
     let state = state.inner().clone();
     Ok(diagnostics::run(&state).await)
