@@ -15,6 +15,14 @@ use tauri::{Emitter, Manager};
 
 use state::{load_store, save_store, AppState, DEFAULT_HOSTS, SITE_HOST};
 
+fn restore_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = tracing_subscriber::fmt()
@@ -93,26 +101,17 @@ pub fn run() {
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        restore_main_window(app);
                     }
                     "quit" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        restore_main_window(app);
                         let _ = app.emit("request-quit", ());
                     }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let tauri::tray::TrayIconEvent::Click { .. } = event {
-                        if let Some(window) = tray.app_handle().get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        restore_main_window(tray.app_handle());
                     }
                 });
             if let Some(icon) = app.default_window_icon() {
