@@ -10,13 +10,17 @@ import {
 import { api, isPreview, type Bootstrap, type UserInfo, type ProxyStatus, type CliReport,
   type DiagReport, type PlazaGroup, type ApplyResult, type PublicAuthSettings,
   type GroupModels, type ModelProbe, type ToolConfigView, type UpdateInfo,
-  type CodexSession, type CodexSessionDetail, type CodexEnhancementStatus } from "./api";
+  type CodexSession, type CodexSessionDetail, type CodexEnhancementStatus, type UpdateProgress } from "./api";
 
 type SiteTab = typeof allSiteTabs[number]["id"];
 type Tab = "setup" | "tools" | "sessions" | "enhance" | "account" | SiteTab;
 type AuthPage = "register" | "forgot-password" | "reset-password";
 const logo = new URL("../icon-source.png", import.meta.url).href;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+const formatBytes = (value: number) => {
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+};
 const tabs = [
   { id: "setup", title: "控制台", icon: LayoutDashboard },
   { id: "tools", title: "工具与修复", icon: Stethoscope },
@@ -97,6 +101,8 @@ export default function App() {
   const [closePrompt, setClosePrompt] = useState(false);
   const [closing, setClosing] = useState(false);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress>({ downloaded: 0 });
   const [restarting, setRestarting] = useState(false);
   const siteArea = useRef<HTMLDivElement>(null);
   const timer = useRef<number>();
@@ -119,11 +125,14 @@ export default function App() {
   };
   const installUpdate = async () => {
     if (!update?.url) return;
+    setUpdateInstalling(true);
+    setUpdateProgress({ downloaded: 0 });
     try {
       const result = await api.installUpdate(update.url);
       setUpdate(null);
       flash(result.message);
     } catch (err) { flash(message(err)); }
+    finally { setUpdateInstalling(false); }
   };
   const restartCodex = async () => {
     if (restarting) return;
@@ -148,6 +157,8 @@ export default function App() {
     listen<string>("host-switched", (event) => flash(`线路已切换至 ${event.payload}`))
       .then((off) => disposed ? off() : unlisteners.push(off)).catch(() => {});
     listen("request-quit", () => { void requestClose(); })
+      .then((off) => disposed ? off() : unlisteners.push(off)).catch(() => {});
+    listen<UpdateProgress>("update-progress", (event) => setUpdateProgress(event.payload))
       .then((off) => disposed ? off() : unlisteners.push(off)).catch(() => {});
     return () => { disposed = true; unlisteners.forEach((off) => off()); window.clearTimeout(timer.current); };
   }, []);
@@ -277,12 +288,12 @@ export default function App() {
             <div className="row wrap">
               {tab === "setup" && <button className="btn" disabled={restarting || boot?.desktop_supported === false}
                 onClick={restartCodex}><RefreshCw size={16} className={restarting ? "spin" : ""} />
-                {restarting ? "重启中..." : "一键重启 Codex"}</button>}
+                {restarting ? "重启中..." : boot?.codex_localization_active ? "一键重启汉化 Codex" : "一键重启 Codex"}</button>}
               <button className="btn" onClick={() => setTab("store")}><Store size={16} />店铺销售</button>
             </div></div>
           {tab === "setup" &&
             <Setup user={user} setUser={setUser} boot={boot} refreshBoot={refreshBoot} flash={flash} />}
-          {tab === "tools" && <Tools boot={boot} flash={flash} goSetup={() => setTab("setup")} />}
+          {tab === "tools" && <Tools boot={boot} flash={flash} refreshBoot={refreshBoot} goSetup={() => setTab("setup")} />}
           {tab === "sessions" && <Sessions flash={flash} />}
           {tab === "enhance" && <CodexEnhance boot={boot} flash={flash} goTools={() => setTab("tools")}
             goSessions={() => setTab("sessions")} />}
@@ -300,9 +311,13 @@ export default function App() {
     {update && <div className="dialog-backdrop"><div className="dialog" role="dialog" aria-modal="true"
       aria-labelledby="update-title"><h2 id="update-title">发现新版本 v{update.latest}</h2>
       <p className="update-notes">{update.notes || "新版本已发布，请更新客户端。"}</p>
-      <div className="row wrap"><button className="btn" onClick={() => setUpdate(null)}>稍后</button>
-        <button className="btn primary" disabled={!update.url} onClick={installUpdate}>
-          <Download size={16} />下载并安装</button></div>
+      {updateInstalling && <div className="update-progress" aria-live="polite">
+        <div className="progress-track"><span style={{ width: updateProgress.total ? `${Math.min(100, updateProgress.downloaded / updateProgress.total * 100)}%` : "100%" }} /></div>
+        <small>{updateProgress.total ? `正在下载 ${formatBytes(updateProgress.downloaded)} / ${formatBytes(updateProgress.total)}` : "正在准备下载..."}</small>
+      </div>}
+      <div className="row wrap"><button className="btn" disabled={updateInstalling} onClick={() => setUpdate(null)}>稍后</button>
+        <button className="btn primary" disabled={!update.url || updateInstalling} onClick={installUpdate}>
+          <Download size={16} />{updateInstalling ? "下载中..." : "下载并安装"}</button></div>
     </div></div>}
   </div>;
 }
@@ -806,6 +821,7 @@ function Sessions({ flash }: { flash: (text: string) => void }) {
   const [loading, setLoading] = useState(false);
   const [reading, setReading] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState<CodexSession | null>(null);
   const refresh = async () => {
     setLoading(true);
     try { setItems(await api.codexSessions()); }
@@ -820,17 +836,21 @@ function Sessions({ flash }: { flash: (text: string) => void }) {
     finally { setReading(false); }
   };
   const filtered = items.filter((item) => `${item.title} ${item.id}`.toLowerCase().includes(query.toLowerCase()));
-  const remove = async () => {
-    const item = items.find((entry) => entry.id === selected);
-    if (!item || !window.confirm(`永久删除会话「${item.title}」？此操作无法撤销。`)) return;
+  const remove = async (item: CodexSession) => {
     setDeleting(true);
     try {
       await api.deleteCodexSession(item.id);
       setItems((current) => current.filter((entry) => entry.id !== item.id));
-      setSelected(""); setDetail(null);
+      if (selected === item.id) {
+        setSelected("");
+        setDetail(null);
+      }
       flash("会话已永久删除");
     } catch (err) { flash(message(err)); }
-    finally { setDeleting(false); }
+    finally {
+      setDeleting(false);
+      setConfirmingDelete(null);
+    }
   };
   return <section className="section sessions-section">
     <div className="section-header"><h2>最近 100 条本地会话</h2><button className="icon-button" title="刷新会话"
@@ -839,16 +859,19 @@ function Sessions({ flash }: { flash: (text: string) => void }) {
       placeholder="搜索标题或 ID" aria-label="搜索会话" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
     <div className="sessions-layout">
       <div className="session-list" aria-label="本地会话列表">
-        {filtered.map((item) => <button key={item.id} className={`session-item ${selected === item.id ? "active" : ""}`}
-          onClick={() => void select(item.id)}>
-          <strong>{item.title}</strong><small>{new Date(item.updated_at * 1000).toLocaleString()} · {(item.size / 1024).toFixed(0)} KB</small>
-        </button>)}
+        {filtered.map((item) => <div key={item.id} className={`session-item ${selected === item.id ? "active" : ""}`}>
+          <button type="button" className="session-item-main" onClick={() => void select(item.id)}>
+            <strong>{item.title}</strong><small>{new Date(item.updated_at * 1000).toLocaleString()} · {(item.size / 1024).toFixed(0)} KB</small>
+          </button>
+          <button type="button" className="icon-button session-item-delete" title="删除会话" aria-label={`删除会话 ${item.title}`}
+            disabled={deleting} onClick={() => setConfirmingDelete(item)}><Trash2 size={15} /></button>
+        </div>)}
         {!loading && !filtered.length && <p className="muted">{query ? "没有匹配的会话" : "没有本地会话"}</p>}
       </div>
       <div className="session-preview">
         {reading ? <span className="muted">读取中...</span> : detail ? <>
           <div className="session-actions"><button className="btn small" disabled={deleting}
-            onClick={remove}><Trash2 size={14} />{deleting ? "删除中..." : "删除会话"}</button></div>
+            onClick={() => setConfirmingDelete(items.find((item) => item.id === selected) ?? null)}><Trash2 size={14} />删除会话</button></div>
           {detail.truncated && <div className="alert warning">会话过长，仅显示已读取部分。</div>}
           {detail.messages.length ? detail.messages.map((item, index) => <article className="session-message" key={index}>
             <strong>{item.role === "user" ? "用户" : "Codex"}</strong><pre>{item.text}</pre>
@@ -856,6 +879,20 @@ function Sessions({ flash }: { flash: (text: string) => void }) {
         </> : <span className="muted">选择会话查看消息</span>}
       </div>
     </div>
+    {confirmingDelete && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !deleting) setConfirmingDelete(null);
+    }}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-session-title">
+        <h3 id="delete-session-title">删除会话</h3>
+        <p>永久删除「{confirmingDelete.title}」？此操作无法撤销。</p>
+        <div className="modal-actions">
+          <button type="button" className="btn" disabled={deleting} onClick={() => setConfirmingDelete(null)}>取消</button>
+          <button type="button" className="btn danger" disabled={deleting} onClick={() => void remove(confirmingDelete)}>
+            <Trash2 size={14} />{deleting ? "删除中..." : "删除"}
+          </button>
+        </div>
+      </div>
+    </div>}
   </section>;
 }
 
@@ -910,9 +947,9 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
           onClick={() => action("restart", async () => {
             const result = await api.restartCodex();
             if (!result.ok) throw new Error(result.log || "重启失败");
-            return "Codex Desktop 已重启";
+            return boot?.codex_localization_active ? "Codex 汉化版已重启" : "Codex Desktop 已重启";
           })}><RefreshCw size={16} className={busy === "restart" ? "spin" : ""} />一键重启</button>
-        <button className="btn" disabled={!!busy || boot?.desktop_supported === false}
+        <button className="btn" disabled={!!busy || boot?.desktop_supported === false || !boot?.codex_localization_available}
           onClick={() => action("launch", () => api.codexLocalization("launch"))}>
           <Monitor size={16} />启动汉化版</button>
         <button className="btn" onClick={goTools}><Languages size={16} />汉化与修复</button>
@@ -921,11 +958,17 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
   </>;
 }
 
-function Tools({ boot, flash, goSetup }: { boot: Bootstrap | null; flash: (text: string) => void; goSetup: () => void }) {
+function Tools({ boot, flash, refreshBoot, goSetup }: {
+  boot: Bootstrap | null;
+  flash: (text: string) => void;
+  refreshBoot: () => Promise<Bootstrap>;
+  goSetup: () => void;
+}) {
   const [report, setReport] = useState<CliReport | null>(null);
   const [diag, setDiag] = useState<DiagReport | null>(null);
   const [busy, setBusy] = useState("");
   const [log, setLog] = useState("");
+  const [restoreConfirm, setRestoreConfirm] = useState(false);
   const detect = async () => {
     setBusy("detect");
     try { setReport(await api.detectClis()); } catch (err) { setLog(message(err)); }
@@ -959,9 +1002,16 @@ function Tools({ boot, flash, goSetup }: { boot: Bootstrap | null; flash: (text:
     if (action === "uninstall" && !window.confirm("恢复 Codex Desktop 英文界面？汉化补丁会从本机移除。")) return;
     setBusy(`locale-${action}`);
     setLog(action === "install" ? "正在下载并校验汉化包..." : "正在处理 Codex 汉化...");
-    try { setLog(await api.codexLocalization(action)); }
+    try {
+      setLog(await api.codexLocalization(action));
+      await refreshBoot();
+    }
     catch (err) { setLog(message(err)); }
     finally { setBusy(""); }
+  };
+  const restoreLocale = async () => {
+    setRestoreConfirm(false);
+    await localize("uninstall");
   };
   return <>
     <section className="section"><div className="section-header"><h2>工具安装</h2><button className="icon-button" title="重新检测" aria-label="重新检测"
@@ -988,13 +1038,20 @@ function Tools({ boot, flash, goSetup }: { boot: Bootstrap | null; flash: (text:
       <div className="row wrap">
         <button className="btn primary" disabled={!!busy || !report?.codex_desktop.installed || !report?.node.installed || boot?.desktop_supported === false}
           onClick={() => localize("install")}><Languages size={16} />{busy === "locale-install" ? "汉化中..." : "一键汉化 Codex"}</button>
-        <button className="btn" disabled={!!busy || boot?.desktop_supported === false} onClick={() => localize("launch")}>
+        <button className="btn" disabled={!!busy || boot?.desktop_supported === false || !boot?.codex_localization_available} onClick={() => localize("launch")}>
           <Monitor size={16} />启动汉化版</button>
-        <button className="btn" disabled={!!busy || boot?.desktop_supported === false} onClick={() => localize("uninstall")}>
+        <button className="btn" disabled={!!busy || boot?.desktop_supported === false || !boot?.codex_localization_available}
+          onClick={() => setRestoreConfirm(true)}>
           <RotateCcw size={16} />恢复英文</button>
       </div>
       {!report?.node.installed && <small className="subtext">需先安装 Node.js。</small>}
     </section>
+    {restoreConfirm && <div className="dialog-backdrop"><div className="dialog" role="alertdialog" aria-modal="true"
+      aria-labelledby="restore-locale-title"><h2 id="restore-locale-title">恢复英文界面</h2>
+      <p>将移除 Codex 汉化补丁并恢复英文界面，是否继续？</p>
+      <div className="row wrap"><button className="btn" disabled={!!busy} onClick={() => setRestoreConfirm(false)}>取消</button>
+        <button className="btn primary" disabled={!!busy} onClick={() => void restoreLocale()}>确认恢复</button></div>
+    </div></div>}
     <section className="section"><div className="section-header"><h2>诊断与修复</h2><Stethoscope size={18} /></div>
       <div className="row wrap"><button className="btn primary" disabled={!!busy || boot?.desktop_supported === false} onClick={diagnose}>
         <Stethoscope size={16} />{busy === "diag" ? "检测中..." : "开始检测（少量计费）"}</button>

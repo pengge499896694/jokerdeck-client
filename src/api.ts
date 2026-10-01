@@ -151,6 +151,11 @@ export interface UpdateInfo {
   error?: string;
 }
 
+export interface UpdateProgress {
+  downloaded: number;
+  total?: number;
+}
+
 export interface Bootstrap {
   logged_in: boolean;
   last_email?: string;
@@ -166,6 +171,8 @@ export interface Bootstrap {
   remember_password: boolean;
   site_url: string;
   desktop_supported: boolean;
+  codex_localization_available: boolean;
+  codex_localization_active: boolean;
 }
 
 export interface PublicAuthSettings {

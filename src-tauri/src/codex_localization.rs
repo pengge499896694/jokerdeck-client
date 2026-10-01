@@ -45,6 +45,17 @@ pub async fn run(app_dir: &Path, http: &reqwest::Client, action: &str) -> Result
     execute(&script, &["-Action", action, "-NoPause"]).await
 }
 
+pub fn status(app_dir: &Path) -> (bool, bool) {
+    let root = app_dir.join(format!("codex-zh-CN-{VERSION}"));
+    let package_available = find_file(&root, "launch-codex-zh-cn.ps1").is_some()
+        && find_file(&root, "scripts/install_windows.ps1").is_some();
+    let active_file = std::env::var_os("USERPROFILE")
+        .map(std::path::PathBuf::from)
+        .map(|path| path.join(".codex").join("zh-cn-patched-active.txt"))
+        .is_some_and(|path| path.is_file());
+    (package_available, package_available && active_file)
+}
+
 fn find_file(root: &Path, suffix: &str) -> Option<std::path::PathBuf> {
     // Releases may be packaged with a top-level `launchers` directory or
     // with the repository root preserved as an extra nested directory.

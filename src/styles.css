@@ -29,7 +29,11 @@ button { color: inherit; }
 .dialog { width: min(440px, 100%); padding: 24px; background: white; border-radius: 8px; box-shadow: 0 16px 48px #11182733; }
 .dialog p { line-height: 1.7; color: #4b5563; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dialog .row { justify-content: flex-end; margin-top: 20px; }
-.update-notes { max-height: 220px; overflow-y: auto; }
+.update-notes { margin: 16px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.update-progress { margin-top: 18px; }
+.progress-track { height: 7px; overflow: hidden; border-radius: 999px; background: #e5e7eb; }
+.progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--brand); transition: width .2s ease; }
+.update-progress small { display: block; margin-top: 8px; color: var(--muted); }
 .workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 204px minmax(0,1fr); }
 .sidebar { display: flex; flex-direction: column; background: white; border-right: 1px solid var(--border); padding: 22px 12px 12px; min-width: 0; overflow-y: auto; scrollbar-width: none; }
 .sidebar::-webkit-scrollbar { display: none; }
@@ -124,16 +128,25 @@ select.input { padding-right: 26px; text-overflow: ellipsis; }
 .session-list, .session-preview { overflow: auto; min-width: 0; }
 .session-list { border-right: 1px solid var(--border); }
 .session-list > .muted, .session-preview > .muted { display: block; padding: 16px; }
-.session-item { width: 100%; padding: 13px; border: 0; border-bottom: 1px solid var(--border); background: white; text-align: left; }
+.session-item { display: flex; align-items: stretch; width: 100%; border-bottom: 1px solid var(--border); background: white; }
 .session-item:hover, .session-item.active { background: #f0fdfa; }
-.session-item strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.session-item small { display: block; margin-top: 6px; color: var(--muted); }
+.session-item-main { flex: 1; min-width: 0; padding: 13px; border: 0; background: transparent; text-align: left; }
+.session-item-main strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.session-item-main small { display: block; margin-top: 6px; color: var(--muted); }
+.session-item-delete { flex: 0 0 40px; align-self: center; margin-right: 5px; color: #b91c1c; opacity: 0; }
+.session-item:hover .session-item-delete, .session-item.active .session-item-delete, .session-item-delete:focus-visible { opacity: 1; }
 .session-preview { padding: 16px; }
 .session-actions { display: flex; justify-content: flex-end; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 .session-actions .btn { color: #b91c1c; }
 .session-message { border-bottom: 1px solid var(--border); padding: 10px 0 16px; }
 .session-message strong { font-size: 12px; color: #0f766e; }
 .session-message pre { font: inherit; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; background: rgb(15 23 42 / 32%); }
+.modal { width: min(420px, 100%); padding: 22px; border: 1px solid var(--border); background: white; box-shadow: 0 18px 50px rgb(15 23 42 / 18%); }
+.modal h3 { margin: 0; font-size: 16px; }
+.modal p { margin: 14px 0 20px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.btn.danger { color: #b91c1c; border-color: #fecaca; }
 @media (max-width: 700px) {
   .sessions-layout { grid-template-columns: 1fr; grid-template-rows: 180px minmax(0, 1fr); }
   .session-list { border-right: 0; border-bottom: 1px solid var(--border); }

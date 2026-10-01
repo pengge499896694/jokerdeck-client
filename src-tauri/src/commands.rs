@@ -1282,7 +1282,15 @@ pub async fn install_cli(which: String) -> CmdResult<InstallResult> {
 }
 
 #[tauri::command]
-pub async fn restart_codex() -> CmdResult<InstallResult> {
+pub async fn restart_codex(state: State<'_, SharedState>) -> CmdResult<InstallResult> {
+    let state = state.inner().clone();
+    let (localized_available, localized_active) = crate::codex_localization::status(&state.app_dir);
+    if localized_available && localized_active {
+        return crate::codex_localization::run(&state.app_dir, &state.http, "launch")
+            .await
+            .map(|log| InstallResult { ok: true, log })
+            .map_err(e);
+    }
     let (ok, log) = cli_manager::restart_codex().await;
     Ok(InstallResult { ok, log })
 }
@@ -1370,11 +1378,12 @@ pub async fn check_update(state: State<'_, SharedState>) -> CmdResult<updater::U
 
 #[tauri::command]
 pub async fn install_update(
+    app: AppHandle,
     state: State<'_, SharedState>,
     url: String,
 ) -> CmdResult<updater::InstallUpdateResult> {
     let state = state.inner().clone();
-    updater::download_and_install(&state.http, &state.app_dir, &url)
+    updater::download_and_install(&state.http, &state.app_dir, &url, &app)
         .await
         .map_err(Into::into)
 }
@@ -1395,6 +1404,8 @@ pub struct Bootstrap {
     pub remember_password: bool,
     pub site_url: String,
     pub desktop_supported: bool,
+    pub codex_localization_available: bool,
+    pub codex_localization_active: bool,
 }
 
 #[tauri::command]
@@ -1406,6 +1417,8 @@ pub async fn get_bootstrap(state: State<'_, SharedState>) -> CmdResult<Bootstrap
     };
     let store = state.store.read().await;
     let saved_password = saved_login_password(&store);
+    let (codex_localization_available, codex_localization_active) =
+        crate::codex_localization::status(&state.app_dir);
     Ok(Bootstrap {
         logged_in,
         last_email: store.last_email.clone(),
@@ -1420,6 +1433,8 @@ pub async fn get_bootstrap(state: State<'_, SharedState>) -> CmdResult<Bootstrap
         saved_password,
         site_url: store.hosts.first().cloned().unwrap_or_default(),
         desktop_supported: !cfg!(target_os = "android"),
+        codex_localization_available,
+        codex_localization_active,
     })
 }
 

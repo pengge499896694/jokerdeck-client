@@ -2,15 +2,14 @@ use std::{path::Path, time::Duration};
 
 use serde::Serialize;
 use serde_json::Value;
+use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const RELAY_MANIFEST: &str = "https://sub2api.186-244-245-198.sslip.io/client/latest.json";
+pub const RELAY_MANIFEST: &str = "https://jokerdeck.de5.net/client-site/latest.json";
 pub const RELAY_MANIFEST_FALLBACK: &str = "https://jokerdeck.cc.cd/client/latest.json";
-pub const GITHUB_MANIFEST: &str =
-    "https://github.com/pengge499896694/jokerdeck-client/releases/latest/download/latest.json";
 /// The release workflow may inject a preferred manifest URL at build time.
-/// Runtime fallbacks remain available when that source is blocked.
+/// Runtime fallbacks remain available when the preferred relay is blocked.
 pub const DEFAULT_MANIFEST: &str = match option_env!("JOKERDECK_UPDATE_MANIFEST_URL") {
     Some(url) => url,
     None => RELAY_MANIFEST,
@@ -30,6 +29,12 @@ pub struct UpdateInfo {
 pub struct InstallUpdateResult {
     pub ok: bool,
     pub message: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct UpdateProgress {
+    pub downloaded: u64,
+    pub total: Option<u64>,
 }
 
 pub async fn check(http: &reqwest::Client, manifest_url: &str) -> UpdateInfo {
@@ -54,12 +59,18 @@ pub async fn download_and_install(
     http: &reqwest::Client,
     app_dir: &Path,
     raw_url: &str,
+    app: &AppHandle,
 ) -> Result<InstallUpdateResult, String> {
     let url = reqwest::Url::parse(raw_url).map_err(|_| "更新地址无效".to_string())?;
     if url.scheme() != "https"
         || !matches!(
             url.host_str(),
-            Some("sub2api.186-244-245-198.sslip.io") | Some("jokerdeck.cc.cd") | Some("github.com")
+            Some("sub2api.186-244-245-198.sslip.io")
+                | Some("download.jokerdeck.de5.net")
+                | Some("jokerdeck.cc.cd")
+                | Some("jokerdeck.de5.net")
+                | Some("jokere.duckdns.org")
+                | Some("api.jokere.asia")
         )
     {
         return Err("更新地址不是受信任的中转或官方发布地址".into());
@@ -107,8 +118,16 @@ pub async fn download_and_install(
     let mut file = tokio::fs::File::create(&temporary)
         .await
         .map_err(|error| format!("创建临时更新文件失败：{error}"))?;
+    let total_size = response.content_length();
     let mut stream = response.bytes_stream();
     let mut total = 0u64;
+    let _ = app.emit(
+        "update-progress",
+        UpdateProgress {
+            downloaded: 0,
+            total: total_size,
+        },
+    );
     while let Some(chunk) = futures_util::StreamExt::next(&mut stream).await {
         let chunk = chunk.map_err(|error| format!("下载更新中断：{error}"))?;
         total = total.saturating_add(chunk.len() as u64);
@@ -119,6 +138,13 @@ pub async fn download_and_install(
         file.write_all(&chunk)
             .await
             .map_err(|error| format!("写入更新包失败：{error}"))?;
+        let _ = app.emit(
+            "update-progress",
+            UpdateProgress {
+                downloaded: total,
+                total: total_size,
+            },
+        );
     }
     file.flush()
         .await
@@ -159,12 +185,7 @@ fn launch_installer(path: &Path) -> Result<(), String> {
 
 fn manifest_sources(primary: &str) -> Vec<&str> {
     let mut sources = Vec::new();
-    for source in [
-        primary,
-        RELAY_MANIFEST,
-        RELAY_MANIFEST_FALLBACK,
-        GITHUB_MANIFEST,
-    ] {
+    for source in [primary, RELAY_MANIFEST, RELAY_MANIFEST_FALLBACK] {
         if !source.trim().is_empty() && !sources.contains(&source) {
             sources.push(source);
         }
@@ -237,8 +258,10 @@ fn mirror_asset_url(source: &str, asset: &str) -> String {
     let Ok(asset_url) = reqwest::Url::parse(asset) else {
         return asset.to_string();
     };
-    if source_url.path() == "/client/latest.json"
-        && asset_url.host_str() == Some("github.com")
+    if matches!(
+        source_url.path(),
+        "/client/latest.json" | "/client-site/latest.json"
+    ) && asset_url.host_str() == Some("github.com")
         && asset_url.path().contains("/releases/download/")
     {
         if let Some(filename) = asset_url
@@ -309,11 +332,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_sources_are_unique_and_keep_relay_before_github() {
+    fn manifest_sources_are_unique_and_keep_relay_sources_only() {
         let sources = manifest_sources(RELAY_MANIFEST);
         assert_eq!(sources.first(), Some(&RELAY_MANIFEST));
-        assert_eq!(sources.last(), Some(&GITHUB_MANIFEST));
-        assert_eq!(sources.len(), 3);
+        assert_eq!(sources.last(), Some(&RELAY_MANIFEST_FALLBACK));
+        assert_eq!(sources.len(), 2);
+        assert!(sources.iter().all(|source| !source.contains("github.com")));
     }
 
     #[test]
@@ -327,10 +351,13 @@ mod tests {
     }
 
     #[test]
-    fn direct_github_manifest_keeps_github_asset_url() {
-        let source = GITHUB_MANIFEST;
+    fn client_site_manifest_rewrites_github_release_asset_to_relay_download() {
+        let source = "https://jokerdeck.de5.net/client-site/latest.json";
         let asset =
-            "https://github.com/pengge499896694/jokerdeck-client/releases/download/v0.1.4/app.exe";
-        assert_eq!(mirror_asset_url(source, asset), asset);
+            "https://github.com/pengge499896694/jokerdeck-client/releases/download/v0.1.9/app.exe";
+        assert_eq!(
+            mirror_asset_url(source, asset),
+            "https://jokerdeck.de5.net/client/download/app.exe"
+        );
     }
 }
