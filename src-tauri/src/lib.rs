@@ -95,7 +95,7 @@ pub fn run() {
             });
             app.manage(app_state);
             use tauri::menu::{Menu, MenuItem};
-            use tauri::tray::TrayIconBuilder;
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
             let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出客户端", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
@@ -112,7 +112,14 @@ pub fn run() {
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                    // Right-click is reserved for the native tray menu. Restoring
+                    // the window here closes that menu before it can be used.
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
                         restore_main_window(tray.app_handle());
                     }
                 });

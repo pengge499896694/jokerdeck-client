@@ -46,12 +46,23 @@ pub async fn run(app_dir: &Path, http: &reqwest::Client, action: &str) -> Result
 }
 
 fn find_file(root: &Path, suffix: &str) -> Option<std::path::PathBuf> {
-    let direct = root.join(suffix);
-    if direct.is_file() {
-        return Some(direct);
+    // Releases may be packaged with a top-level `launchers` directory or
+    // with the repository root preserved as an extra nested directory.
+    let candidates = [
+        root.join(suffix),
+        root.join("launchers")
+            .join(suffix.strip_prefix("launchers/").unwrap_or(suffix)),
+        root.join(format!("codex-zh-CN-{VERSION}")).join(suffix),
+        root.join(format!("codex-zh-CN-{VERSION}"))
+            .join("launchers")
+            .join(suffix.strip_prefix("launchers/").unwrap_or(suffix)),
+    ];
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
     }
-    let nested = root.join(format!("codex-zh-CN-{VERSION}")).join(suffix);
-    nested.is_file().then_some(nested)
+    None
 }
 
 async fn download_verified(http: &reqwest::Client, root: &Path) -> Result<()> {
@@ -360,5 +371,24 @@ mod tests {
         assert_eq!(urls.len(), crate::state::DEFAULT_HOSTS.len());
         assert!(urls.iter().all(|url| url.ends_with(ASSET)));
         assert!(urls.iter().all(|url| !url.contains("github.com")));
+    }
+
+    #[test]
+    fn finds_launcher_in_release_launchers_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "jokerdeck-codex-localization-test-{}",
+            std::process::id()
+        ));
+        let launchers = root.join("launchers");
+        std::fs::create_dir_all(&launchers).unwrap();
+        let launcher = launchers.join("launch-codex-zh-cn.ps1");
+        std::fs::write(&launcher, "Write-Output ok").unwrap();
+
+        assert_eq!(
+            find_file(&root, "launch-codex-zh-cn.ps1").as_deref(),
+            Some(launcher.as_path())
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
