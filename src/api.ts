@@ -250,6 +250,7 @@ export const api = {
   setExtensions: (computer_use: boolean) => call<void>("set_extensions", { computerUse: computer_use }),
   detectClis: () => call<CliReport>("detect_clis"),
   installCli: (which: string) => call<InstallResult>("install_cli", { which }),
+  downloadCodexDesktop: () => call<InstallResult>("download_codex_desktop"),
   restartCodex: () => call<InstallResult>("restart_codex"),
   codexLocalization: (action: "install" | "uninstall" | "launch") =>
     call<string>("codex_localization", { action }),

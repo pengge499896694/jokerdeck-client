@@ -23,6 +23,10 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Run a shell command cross-platform, returning (success, combined output).
 /// Spawned without a visible console window on Windows.
 async fn sh(command: &str) -> (bool, String) {
+    sh_with_timeout(command, 600).await
+}
+
+async fn sh_with_timeout(command: &str, seconds: u64) -> (bool, String) {
     let (program, args): (&str, Vec<&str>) = if cfg!(windows) {
         ("cmd", vec!["/C", command])
     } else {
@@ -33,7 +37,7 @@ async fn sh(command: &str) -> (bool, String) {
     cmd.kill_on_drop(true);
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    match tokio::time::timeout(std::time::Duration::from_secs(600), cmd.output()).await {
+    match tokio::time::timeout(std::time::Duration::from_secs(seconds), cmd.output()).await {
         Ok(Ok(out)) => {
             let mut s = String::from_utf8_lossy(&out.stdout).to_string();
             s.push_str(&String::from_utf8_lossy(&out.stderr));
@@ -93,10 +97,31 @@ async fn macos_brew() -> Option<String> {
 }
 
 async fn install_macos_brew() -> (bool, String) {
-    // Homebrew's installer selects /opt/homebrew on Apple Silicon and
-    // /usr/local on Intel; use bash directly so a GUI-launched app has no
-    // dependency on the user's interactive shell profile.
-    sh(r#"tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT; curl -fsSL --retry 3 --connect-timeout 15 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$tmp" && NONINTERACTIVE=1 /bin/bash "$tmp""#).await
+    // Both endpoints serve Homebrew/install; keep the installer on disk until
+    // the download succeeds so a reset connection cannot execute partial data.
+    sh_with_timeout(
+        r#"tmp="$(mktemp)" || exit 1
+trap 'rm -f "$tmp"' EXIT
+downloaded=0
+for url in \
+  https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh \
+  https://cdn.jsdelivr.net/gh/Homebrew/install@HEAD/install.sh \
+  https://gcore.jsdelivr.net/gh/Homebrew/install@HEAD/install.sh; do
+  if curl -fLsS --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 90 "$url" -o "$tmp" && \
+     /usr/bin/grep -q 'Homebrew' "$tmp"; then
+    downloaded=1
+    break
+  fi
+  printf '下载源不可用：%s\n' "$url"
+done
+if [ "$downloaded" -ne 1 ]; then
+  printf 'Homebrew 官方安装脚本下载失败，请检查网络后重试。\n'
+  exit 1
+fi
+NONINTERACTIVE=1 /bin/bash "$tmp""#,
+        1800,
+    )
+    .await
 }
 
 pub async fn detect_all() -> CliReport {
@@ -195,8 +220,11 @@ pub async fn install(which_cli: &str) -> (bool, String) {
                     path
                 };
                 details.push_str("\n正在通过 Homebrew 安装 Node.js…");
-                let (ok, output) =
-                    sh(&format!("\"{}\" install node", brew.replace('"', "\\\""))).await;
+                let (ok, output) = sh_with_timeout(
+                    &format!("\"{}\" install node", brew.replace('"', "\\\"")),
+                    1800,
+                )
+                .await;
                 if !output.is_empty() {
                     details.push('\n');
                     details.push_str(&output);

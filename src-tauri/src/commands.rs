@@ -1290,6 +1290,22 @@ pub async fn install_cli(which: String) -> CmdResult<InstallResult> {
 }
 
 #[tauri::command]
+pub async fn download_codex_desktop(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+) -> CmdResult<InstallResult> {
+    if cfg!(target_os = "android") {
+        return Err("当前平台不支持安装 Codex Desktop".into());
+    }
+    let report = |progress| {
+        let _ = app.emit("codex-desktop-download-progress", progress);
+    };
+    crate::codex_desktop_download::download(&state.http, &state.app_dir, &report)
+        .await
+        .map_err(e)
+}
+
+#[tauri::command]
 pub async fn restart_codex(state: State<'_, SharedState>) -> CmdResult<InstallResult> {
     let state = state.inner().clone();
     let _guard = state.configuration_lock.lock().await;

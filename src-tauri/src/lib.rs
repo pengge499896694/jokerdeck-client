@@ -1,6 +1,7 @@
 mod api;
 mod cli_manager;
 mod codex_desktop;
+mod codex_desktop_download;
 mod codex_enhancement;
 mod codex_localization;
 mod codex_sessions;
@@ -164,6 +165,7 @@ pub fn run() {
             commands::set_extensions,
             commands::detect_clis,
             commands::install_cli,
+            commands::download_codex_desktop,
             commands::restart_codex,
             commands::codex_localization,
             commands::list_codex_sessions,

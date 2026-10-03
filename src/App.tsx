@@ -114,8 +114,11 @@ export default function App() {
   const requestClose = async () => {
     if (closing) return;
     try {
-      if ((await api.proxyStatus()).running) setClosePrompt(true);
-      else await api.quitApp(false);
+      if ((await api.proxyStatus()).running) {
+        await api.hideSite();
+        setTab("setup");
+        setClosePrompt(true);
+      } else await api.quitApp(false);
     } catch (err) { flash(message(err)); }
   };
   const confirmClose = async () => {
@@ -998,6 +1001,8 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
   const [localeProgress, setLocaleProgress] = useState<{ percent: number; detail: string } | null>(null);
   const [localeDetails, setLocaleDetails] = useState<string[]>([]);
   const [localeResult, setLocaleResult] = useState("");
+  const [downloadProgress, setDownloadProgress] = useState<{ percent: number; detail: string } | null>(null);
+  const [downloadDetails, setDownloadDetails] = useState<string[]>([]);
   const [restoreConfirm, setRestoreConfirm] = useState(false);
   useEffect(() => {
     if (isPreview) return;
@@ -1007,6 +1012,17 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
       if (disposed) return;
       setLocaleProgress(payload);
       setLocaleDetails((lines) => [...lines.slice(-79), payload.detail]);
+    }).then((off) => { if (disposed) off(); else unsubscribe = off; }).catch(() => {});
+    return () => { disposed = true; unsubscribe?.(); };
+  }, []);
+  useEffect(() => {
+    if (isPreview) return;
+    let disposed = false;
+    let unsubscribe: (() => void) | undefined;
+    listen<{ percent: number; detail: string }>("codex-desktop-download-progress", ({ payload }) => {
+      if (disposed) return;
+      setDownloadProgress(payload);
+      setDownloadDetails((lines) => [...lines.slice(-79), payload.detail]);
     }).then((off) => { if (disposed) off(); else unsubscribe = off; }).catch(() => {});
     return () => { disposed = true; unsubscribe?.(); };
   }, []);
@@ -1020,6 +1036,18 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
     setBusy(which); setLog("安装中...");
     try {
       const result = await api.installCli(which);
+      setLog(result.log || (result.ok ? "安装完成" : "安装失败"));
+      setReport(await api.detectClis());
+    } catch (err) { setLog(message(err)); }
+    finally { setBusy(""); }
+  };
+  const downloadCodexDesktop = async () => {
+    setBusy("desktop-download");
+    setLog("正在准备 Codex Desktop 安装...");
+    setDownloadProgress({ percent: 0, detail: "准备安装" });
+    setDownloadDetails([]);
+    try {
+      const result = await api.downloadCodexDesktop();
       setLog(result.log || (result.ok ? "安装完成" : "安装失败"));
       setReport(await api.detectClis());
     } catch (err) { setLog(message(err)); }
@@ -1068,9 +1096,17 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
       ] as const).map(([label, which, item]) => <div className="list-row" key={label}><span className="row"><Monitor size={18} />
         <span><strong>{label}</strong><small className="subtext">{item?.version ?? (item?.installed ? "已检测到" : "未检测到")}</small></span></span>
         {item?.installed ? <span className="tag success">已安装</span> : which ? <button className="btn small" disabled={!!busy || boot?.desktop_supported === false}
-          onClick={() => which === "desktop" ? api.openUrl("https://developers.openai.com/codex/app").catch((err) => flash(message(err))) : install(which)}>
-          <Download size={14} />{which === "desktop" ? "下载" : busy === which ? "安装中..." : "安装"}</button> : <span className="tag warning">缺失</span>}</div>)}
+          onClick={() => which === "desktop" ? void downloadCodexDesktop() : install(which)}>
+          <Download size={14} />{which === "desktop" ? (busy === "desktop-download" ? "安装中..." : "下载并安装") : busy === which ? "安装中..." : "安装"}</button> : <span className="tag warning">缺失</span>}</div>)}
       {log && <pre className="log">{log}</pre>}
+      {downloadProgress && <div className="localization-progress" aria-live="polite">
+        <div className="localization-progress-heading"><strong>{downloadProgress.detail}</strong><span>{downloadProgress.percent}%</span></div>
+        <div className="progress-track" role="progressbar" aria-valuenow={downloadProgress.percent} aria-valuemin={0} aria-valuemax={100}>
+          <span style={{ width: `${downloadProgress.percent}%` }} /></div>
+        <details open={busy === "desktop-download"}><summary>下载详情</summary>
+          <pre className="log localization-log">{downloadDetails.join("\n")}</pre>
+        </details>
+      </div>}
     </section>
     <section className="section"><div className="section-header"><h2>Codex Desktop</h2><Monitor size={18} /></div>
       <div className="row wrap">
