@@ -92,6 +92,13 @@ async fn macos_brew() -> Option<String> {
         .filter(|path| !path.is_empty())
 }
 
+async fn install_macos_brew() -> (bool, String) {
+    // Homebrew's installer selects /opt/homebrew on Apple Silicon and
+    // /usr/local on Intel; use bash directly so a GUI-launched app has no
+    // dependency on the user's interactive shell profile.
+    sh(r#"tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT; curl -fsSL --retry 3 --connect-timeout 15 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$tmp" && NONINTERACTIVE=1 /bin/bash "$tmp""#).await
+}
+
 pub async fn detect_all() -> CliReport {
     let (node, npm, claude, codex, codex_desktop) = tokio::join!(
         detect("node", "-v"),
@@ -164,15 +171,37 @@ pub async fn install(which_cli: &str) -> (bool, String) {
             if cfg!(windows) {
                 sh("winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements").await
             } else if cfg!(target_os = "macos") {
-                let Some(brew) = macos_brew().await else {
-                    return (
-                        false,
-                        "未检测到 Homebrew。请先在终端安装 Homebrew，再回到客户端重试：\n\
-/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-                            .into(),
-                    );
+                let mut details = String::from("正在检测 Homebrew…");
+                let brew = if let Some(path) = macos_brew().await {
+                    details.push_str(&format!("\n已找到 Homebrew：{path}"));
+                    path
+                } else {
+                    details.push_str("\n未找到 Homebrew，正在自动安装…");
+                    let (ok, output) = install_macos_brew().await;
+                    if !output.is_empty() {
+                        details.push('\n');
+                        details.push_str(&output);
+                    }
+                    if !ok {
+                        return (false, format!("Homebrew 安装失败：\n{details}"));
+                    }
+                    let Some(path) = macos_brew().await else {
+                        return (
+                            false,
+                            format!("Homebrew 安装命令已完成，但仍未找到 brew：\n{details}"),
+                        );
+                    };
+                    details.push_str(&format!("\nHomebrew 安装完成：{path}"));
+                    path
                 };
-                sh(&format!("\"{}\" install node", brew.replace('"', "\\\""))).await
+                details.push_str("\n正在通过 Homebrew 安装 Node.js…");
+                let (ok, output) =
+                    sh(&format!("\"{}\" install node", brew.replace('"', "\\\""))).await;
+                if !output.is_empty() {
+                    details.push('\n');
+                    details.push_str(&output);
+                }
+                return (ok, details);
             } else {
                 (false, "当前平台暂不支持自动安装 Node.js".into())
             }
