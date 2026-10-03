@@ -169,7 +169,9 @@ export interface Bootstrap {
   auto_fallback: boolean;
   saved_password?: string;
   remember_password: boolean;
-  site_url: string;
+    site_url: string;
+    hosts: string[];
+    preferred_host?: string;
   desktop_supported: boolean;
   codex_localization_available: boolean;
   codex_localization_active: boolean;

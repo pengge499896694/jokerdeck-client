@@ -1,6 +1,6 @@
 [package]
 name = "jokerdeck-desktop"
-version = "0.1.10"
+version = "0.1.11"
 description = "jokerdeck client for the sub2api relay"
 authors = ["jokerdeck"]
 edition = "2021"
@@ -30,6 +30,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "5"
 toml_edit = "0.22"
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Globalization"] }

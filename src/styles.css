@@ -34,12 +34,22 @@ button { color: inherit; }
 .progress-track { height: 7px; overflow: hidden; border-radius: 999px; background: #e5e7eb; }
 .progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--brand); transition: width .2s ease; }
 .update-progress small { display: block; margin-top: 8px; color: var(--muted); }
+.localization-progress { margin-top: 16px; max-width: 760px; }
+.localization-progress-heading { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 9px; font-size: 12px; overflow-wrap: anywhere; }
+.localization-progress-heading strong { font-weight: 500; min-width: 0; }
+.localization-progress-heading span { flex-shrink: 0; color: var(--muted); }
+.localization-progress details { margin-top: 12px; }
+.localization-progress summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.localization-result { margin: 10px 0 0; overflow-wrap: anywhere; }
+.localization-log { max-height: 220px; margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 204px minmax(0,1fr); }
 .sidebar { display: flex; flex-direction: column; background: white; border-right: 1px solid var(--border); padding: 22px 12px 12px; min-width: 0; overflow-y: auto; scrollbar-width: none; }
 .sidebar::-webkit-scrollbar { display: none; }
 .site-nav-label { padding-top: 14px; }
 .site-nav { flex: 0 0 auto; }
 .line-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-bottom: 18px; overflow-wrap: anywhere; }
+.login-host { margin-bottom: 12px; }
+.login-host .line-status { margin: 8px 0 0; }
 .sidebar-brand { display: flex; gap: 10px; align-items: center; padding: 0 10px 26px; }
 .sidebar-brand img { width: 36px; height: 36px; object-fit: contain; border-radius: 8px; }
 .sidebar-brand strong { font-size: 18px; }
@@ -163,13 +173,13 @@ select.input { padding-right: 26px; text-overflow: ellipsis; }
 .log { font: 12px/1.7 Consolas, monospace; padding: 12px; background: #f3f4f6; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; border-radius: 6px; }
 .site-link { width: 100%; border: 0; border-bottom: 1px solid var(--border); background: none; padding: 16px 0; display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
 .site-link:hover { color: var(--brand); }
-.login-page { flex: 1; overflow: auto; padding: 42px 20px 24px; }
-.login-brand { display: flex; flex-direction: column; align-items: center; margin-bottom: 24px; }
+.login-page { flex: 1; min-height: 0; overflow: auto; padding: 28px 20px 24px; }
+.login-brand { display: flex; flex-direction: column; align-items: center; margin-bottom: 18px; }
 .login-brand img { width: 52px; height: 52px; object-fit: contain; border-radius: 8px; }
 .login-brand h1 { font-size: 26px; margin-top: 14px; }
 .login-brand > span { color: var(--muted); font-size: 12px; margin-top: 7px; }
 .login-form { max-width: 380px; margin: auto; }
-.login-form h2 { text-align: center; font-size: 19px; margin-bottom: 26px; }
+.login-form h2 { text-align: center; font-size: 19px; margin-bottom: 18px; }
 .password-input { position: relative; }
 .password-input input { padding-right: 45px; }
 .password-input .icon-button { position: absolute; top: 5px; right: 5px; }
@@ -177,7 +187,7 @@ select.input { padding-right: 26px; text-overflow: ellipsis; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #4b5563; }
 .text-button { padding: 0; border: 0; display: inline-flex; align-items: center; gap: 5px; background: none; color: var(--brand); font-size: 12px; }
 .login-links { display: flex; justify-content: space-between; margin-top: 22px; }
-.login-footer { display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 11px; color: var(--muted); margin-top: 30px; }
+.login-footer { display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 11px; color: var(--muted); margin-top: 22px; }
 .login-footer span { margin-left: 12px; }
 .toast { position: fixed; right: 22px; bottom: 22px; max-width: min(400px,calc(100vw - 32px)); padding: 13px 16px; border: 1px solid #99f6e4; border-radius: 8px; background: white; box-shadow: 0 5px 24px #11182714; font-size: 13px; overflow-wrap: anywhere; z-index: 10; }
 .loading { display: grid; flex: 1; place-items: center; color: var(--muted); }
@@ -212,5 +222,5 @@ select.input { padding-right: 26px; text-overflow: ellipsis; }
   .list-row { align-items: flex-start; }
   .list-row .row { flex-wrap: wrap; }
   .detail { max-width: 55%; }
-  .login-page { padding-top: 28px; }
+  .login-page { padding-top: 20px; }
 }

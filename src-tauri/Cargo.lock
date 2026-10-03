@@ -2005,7 +2005,7 @@ dependencies = [
 
 [[package]]
 name = "jokerdeck-desktop"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "axum",
@@ -2017,6 +2017,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-notification",

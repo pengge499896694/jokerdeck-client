@@ -91,7 +91,7 @@ pub async fn detect_all() -> CliReport {
 async fn detect_codex_desktop() -> CliStatus {
     #[cfg(windows)]
     {
-        let (ok, out) = sh("powershell -NoProfile -NonInteractive -Command \"Get-AppxPackage *Codex* | Select-Object -First 1 | ForEach-Object { $_.InstallLocation }\"").await;
+        let (ok, out) = sh("powershell -NoProfile -NonInteractive -Command \"Get-AppxPackage *Codex* | Where-Object { $_.Name -notmatch 'Codex\\+\\+' } | Sort-Object Version -Descending | Select-Object -First 1 | ForEach-Object { $_.InstallLocation }\"").await;
         if ok && !out.is_empty() {
             return CliStatus {
                 installed: true,
@@ -100,7 +100,12 @@ async fn detect_codex_desktop() -> CliStatus {
             };
         }
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            for relative in ["Programs/Codex/Codex.exe", "Codex/Codex.exe"] {
+            for relative in [
+                "Programs/Codex/Codex.exe",
+                "Codex/Codex.exe",
+                "Programs/Codex/ChatGPT.exe",
+                "Codex/ChatGPT.exe",
+            ] {
                 let path = std::path::PathBuf::from(&local).join(relative);
                 if path.is_file() {
                     return CliStatus {
@@ -151,14 +156,4 @@ pub async fn install(which_cli: &str) -> (bool, String) {
         }
         other => (false, format!("未知的安装目标: {other}")),
     }
-}
-
-pub async fn restart_codex() -> (bool, String) {
-    if cfg!(windows) {
-        return sh(r#"powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; Stop-Process -Name Codex,CodexHelper -Force; Start-Sleep -Milliseconds 500; $app=Get-StartApps | Where-Object { $_.Name -match 'Codex' } | Select-Object -First 1; if ($app) { Start-Process ('shell:AppsFolder\' + $app.AppID) } else { $paths=@($env:LOCALAPPDATA + '\Programs\Codex\Codex.exe',$env:LOCALAPPDATA + '\Codex\Codex.exe'); $path=$paths | Where-Object { Test-Path $_ } | Select-Object -First 1; if (-not $path) { throw '未找到 Codex Desktop 启动入口' }; Start-Process $path }"#).await;
-    }
-    if cfg!(target_os = "macos") {
-        return sh("pkill -f '/Codex' >/dev/null 2>&1 || true; sleep 0.5; open -a Codex").await;
-    }
-    (false, "当前平台暂不支持一键重启 Codex Desktop".into())
 }

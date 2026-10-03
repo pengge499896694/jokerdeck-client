@@ -1,5 +1,6 @@
 mod api;
 mod cli_manager;
+mod codex_desktop;
 mod codex_enhancement;
 mod codex_localization;
 mod codex_sessions;

@@ -7,7 +7,7 @@ import {
   ChartNoAxesCombined, Store, Languages, History, Search, Sparkles, Trash2,
   Settings2, ShieldCheck, Stethoscope, UserRound, Wallet, X, Power, RotateCcw, Bell, Users, Folder, Globe, Receipt, SlidersHorizontal,
 } from "lucide-react";
-import { api, isPreview, type Bootstrap, type UserInfo, type ProxyStatus, type CliReport,
+import { api, isPreview, type Bootstrap, type UserInfo, type ProxyStatus, type HostHealth, type CliReport,
   type DiagReport, type PlazaGroup, type ApplyResult, type PublicAuthSettings,
   type GroupModels, type ModelProbe, type ToolConfigView, type UpdateInfo,
   type CodexSession, type CodexSessionDetail, type CodexEnhancementStatus, type UpdateProgress } from "./api";
@@ -334,14 +334,35 @@ function Login({ boot, onLogin, onAuthPage, initialError }: {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError);
-  const [line, setLine] = useState("正在检测线路");
+  const [hosts, setHosts] = useState(boot?.hosts ?? []);
+  const [preferredHost, setPreferredHost] = useState(boot?.preferred_host ?? boot?.site_url ?? "");
+  const [health, setHealth] = useState<HostHealth[]>([]);
+  const [probing, setProbing] = useState(!isPreview);
+  const [switching, setSwitching] = useState(false);
   useEffect(() => {
     if (isPreview) return;
-    api.probeHosts().then((hosts) => {
-      const reachable = hosts.find((host) => host.healthy);
-      setLine(reachable ? `已连接 ${reachable.host}` : "线路未连通，请检查网络或中转地址");
-    }).catch(() => setLine("线路检测失败"));
+    let active = true;
+    api.probeHosts().then((results) => {
+      if (!active) return;
+      setHosts((current) => current.length ? current : results.map(({ host }) => host));
+      setHealth(results);
+    }).catch((err) => { if (active) setError(message(err)); })
+      .finally(() => { if (active) setProbing(false); });
+    return () => { active = false; };
   }, []);
+  const selectedHealth = health.find(({ host }) => host === preferredHost);
+  const line = probing ? "正在检测线路" : selectedHealth?.healthy ? `已连接 ${preferredHost}`
+    : selectedHealth ? `线路不可达：${preferredHost}` : "线路未连通，请检查网络或中转地址";
+  const switchHost = async (host: string) => {
+    if (switching || busy || host === preferredHost) return;
+    setSwitching(true);
+    try {
+      await api.setPreferredHost(host);
+      setPreferredHost(host);
+      setError("");
+    } catch (err) { setError(message(err)); }
+    finally { setSwitching(false); }
+  };
   const finish = async (user: UserInfo) => {
     await api.saveLogin(email.trim(), password, remember);
     setPassword("");
@@ -372,7 +393,13 @@ function Login({ boot, onLogin, onAuthPage, initialError }: {
   return <main className="login-page">
     <div className="login-brand"><img src={logo} alt="jokerdeck" /><h1>jokerdeck</h1><span>中转服务</span></div>
     <div className="login-form">
-      <div className="line-status"><span className={`dot ${line.startsWith("已连接") ? "ok" : ""}`} />{line}</div>
+      <div className="field login-host"><label htmlFor="login-host">连接地址</label>
+        <select id="login-host" className="input" value={preferredHost} disabled={busy || switching || isPreview}
+          onChange={(event) => void switchHost(event.target.value)}>
+          {hosts.map((host) => <option key={host} value={host}>{host}</option>)}
+        </select>
+        <div className="line-status"><span className={`dot ${selectedHealth?.healthy ? "ok" : ""}`} />{line}</div>
+      </div>
       <h2>{twofa ? "两步验证" : "登录账户"}</h2>
       <form onSubmit={submit}>
         {!twofa ? <>
@@ -947,9 +974,9 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
           onClick={() => action("restart", async () => {
             const result = await api.restartCodex();
             if (!result.ok) throw new Error(result.log || "重启失败");
-            return boot?.codex_localization_active ? "Codex 汉化版已重启" : "Codex Desktop 已重启";
+            return boot?.codex_localization_active ? "汉化版 Codex 已重启" : "Codex Desktop 已重启";
           })}><RefreshCw size={16} className={busy === "restart" ? "spin" : ""} />一键重启</button>
-        <button className="btn" disabled={!!busy || boot?.desktop_supported === false || !boot?.codex_localization_available}
+        <button className="btn" disabled={!!busy || boot?.desktop_supported === false}
           onClick={() => action("launch", () => api.codexLocalization("launch"))}>
           <Monitor size={16} />启动汉化版</button>
         <button className="btn" onClick={goTools}><Languages size={16} />汉化与修复</button>
@@ -968,7 +995,21 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
   const [diag, setDiag] = useState<DiagReport | null>(null);
   const [busy, setBusy] = useState("");
   const [log, setLog] = useState("");
+  const [localeProgress, setLocaleProgress] = useState<{ percent: number; detail: string } | null>(null);
+  const [localeDetails, setLocaleDetails] = useState<string[]>([]);
+  const [localeResult, setLocaleResult] = useState("");
   const [restoreConfirm, setRestoreConfirm] = useState(false);
+  useEffect(() => {
+    if (isPreview) return;
+    let disposed = false;
+    let unsubscribe: (() => void) | undefined;
+    listen<{ percent: number; detail: string }>("codex-localization-progress", ({ payload }) => {
+      if (disposed) return;
+      setLocaleProgress(payload);
+      setLocaleDetails((lines) => [...lines.slice(-79), payload.detail]);
+    }).then((off) => { if (disposed) off(); else unsubscribe = off; }).catch(() => {});
+    return () => { disposed = true; unsubscribe?.(); };
+  }, []);
   const detect = async () => {
     setBusy("detect");
     try { setReport(await api.detectClis()); } catch (err) { setLog(message(err)); }
@@ -999,14 +1040,19 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
     finally { setBusy(""); }
   };
   const localize = async (action: "install" | "uninstall" | "launch") => {
-    if (action === "uninstall" && !window.confirm("恢复 Codex Desktop 英文界面？汉化补丁会从本机移除。")) return;
     setBusy(`locale-${action}`);
-    setLog(action === "install" ? "正在下载并校验汉化包..." : "正在处理 Codex 汉化...");
+    setLocaleProgress({ percent: 0, detail: "准备汉化操作" });
+    setLocaleDetails([]);
+    setLocaleResult("");
     try {
-      setLog(await api.codexLocalization(action));
+      setLocaleResult(await api.codexLocalization(action));
       await refreshBoot();
     }
-    catch (err) { setLog(message(err)); }
+    catch (err) {
+      const detail = message(err);
+      setLocaleResult(detail);
+      setLocaleDetails((lines) => [...lines.slice(-79), detail]);
+    }
     finally { setBusy(""); }
   };
   const restoreLocale = async () => {
@@ -1034,16 +1080,28 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
       </div>
     </section>
     <section className="section"><div className="section-header"><h2>Codex Desktop 汉化</h2></div>
-      <p className="subtext">非官方中文补丁（xqnode/codex-zh-CN v0.1.2），会备份并修改 Codex Desktop 本地资源。可能需要管理员授权；Codex 更新后可能需要重新汉化。仅支持 Windows。</p>
+      <p className="subtext">{navigator.platform.toLowerCase().includes("mac")
+        ? "macOS 使用 Codex 原生语言设置切换为简体中文，设置后重新启动生效。"
+        : "Windows 使用非官方中文补丁（xqnode/codex-zh-CN v0.1.2），首次启动汉化版时会自动下载并校验语言包，可能需要管理员授权。"}</p>
       <div className="row wrap">
-        <button className="btn primary" disabled={!!busy || !report?.codex_desktop.installed || !report?.node.installed || boot?.desktop_supported === false}
+        <button className="btn primary" disabled={!!busy || !report?.codex_desktop.installed || boot?.desktop_supported === false}
           onClick={() => localize("install")}><Languages size={16} />{busy === "locale-install" ? "汉化中..." : "一键汉化 Codex"}</button>
-        <button className="btn" disabled={!!busy || boot?.desktop_supported === false || !boot?.codex_localization_available} onClick={() => localize("launch")}>
+        <button className="btn" disabled={!!busy || boot?.desktop_supported === false || !report?.codex_desktop.installed} onClick={() => localize("launch")}>
           <Monitor size={16} />启动汉化版</button>
         <button className="btn" disabled={!!busy || boot?.desktop_supported === false || !boot?.codex_localization_available}
           onClick={() => setRestoreConfirm(true)}>
           <RotateCcw size={16} />恢复英文</button>
       </div>
+      {localeProgress && <div className="localization-progress" aria-live="polite">
+        <div className="localization-progress-heading"><strong>{localeProgress.detail}</strong><span>{localeProgress.percent}%</span></div>
+        <div className="progress-track" role="progressbar" aria-valuenow={localeProgress.percent} aria-valuemin={0} aria-valuemax={100}>
+          <span style={{ width: `${localeProgress.percent}%` }} /></div>
+        {localeResult && <p className="localization-result">{localeResult}</p>}
+        <details open={!!busy && busy.startsWith("locale-")}>
+          <summary>汉化详情</summary>
+          <pre className="log localization-log">{localeDetails.join("\n")}</pre>
+        </details>
+      </div>}
       {!report?.node.installed && <small className="subtext">需先安装 Node.js。</small>}
     </section>
     {restoreConfirm && <div className="dialog-backdrop"><div className="dialog" role="alertdialog" aria-modal="true"

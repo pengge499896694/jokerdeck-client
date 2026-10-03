@@ -1,6 +1,6 @@
 use futures_util::future::join_all;
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use std::collections::HashMap;
 
@@ -64,6 +64,14 @@ async fn pick_host(state: &AppState) -> String {
             .any(|host| host.latency_ms.is_some())
             .then(|| proxy.ordered_reachable_hosts())
     };
+    if let Some(host) = preferred.as_ref().and_then(|preferred| {
+        cached
+            .as_ref()
+            .and_then(|ordered| ordered.iter().find(|host| *host == preferred))
+            .cloned()
+    }) {
+        return host;
+    }
     if let Some(host) =
         cached.and_then(|ordered| ordered.into_iter().find(|host| hosts.contains(host)))
     {
@@ -80,7 +88,7 @@ async fn pick_host(state: &AppState) -> String {
                 .await;
             (
                 host,
-                result.is_ok(),
+                result.is_ok_and(|response| response.status().is_success()),
                 Some(started.elapsed().as_millis() as u64),
             )
         }
@@ -1145,7 +1153,7 @@ pub async fn probe_hosts(state: State<'_, SharedState>) -> CmdResult<Vec<HostHea
                 .timeout(std::time::Duration::from_secs(5))
                 .send()
                 .await
-                .is_ok();
+                .is_ok_and(|response| response.status().is_success());
             HostHealth {
                 host,
                 healthy,
@@ -1284,29 +1292,39 @@ pub async fn install_cli(which: String) -> CmdResult<InstallResult> {
 #[tauri::command]
 pub async fn restart_codex(state: State<'_, SharedState>) -> CmdResult<InstallResult> {
     let state = state.inner().clone();
-    let (localized_available, localized_active) = crate::codex_localization::status(&state.app_dir);
-    if localized_available && localized_active {
-        return crate::codex_localization::run(&state.app_dir, &state.http, "launch")
-            .await
-            .map(|log| InstallResult { ok: true, log })
-            .map_err(e);
-    }
-    let (ok, log) = cli_manager::restart_codex().await;
+    let _guard = state.configuration_lock.lock().await;
+    let (_, localized_active) = crate::codex_localization::status(&state.app_dir);
+    let (ok, log) = crate::codex_desktop::restart(localized_active).await;
     Ok(InstallResult { ok, log })
 }
 
 #[tauri::command]
 pub async fn codex_localization(
+    app: AppHandle,
     state: State<'_, SharedState>,
     action: String,
 ) -> CmdResult<String> {
-    if !cfg!(windows) {
-        return Err("Codex Desktop 界面汉化目前仅支持 Windows".into());
-    }
+    let preferred_host = {
+        let store = state.store.read().await;
+        store
+            .settings
+            .preferred_host
+            .clone()
+            .unwrap_or_else(|| crate::state::SITE_HOST.to_string())
+    };
     let _guard = state.configuration_lock.lock().await;
-    crate::codex_localization::run(&state.app_dir, &state.http, &action)
-        .await
-        .map_err(e)
+    let report = |value| {
+        let _ = app.emit("codex-localization-progress", value);
+    };
+    crate::codex_localization::run(
+        &state.app_dir,
+        &state.http,
+        &action,
+        &preferred_host,
+        &report,
+    )
+    .await
+    .map_err(e)
 }
 
 #[tauri::command]
@@ -1403,6 +1421,8 @@ pub struct Bootstrap {
     pub saved_password: Option<String>,
     pub remember_password: bool,
     pub site_url: String,
+    pub hosts: Vec<String>,
+    pub preferred_host: Option<String>,
     pub desktop_supported: bool,
     pub codex_localization_available: bool,
     pub codex_localization_active: bool,
@@ -1432,6 +1452,8 @@ pub async fn get_bootstrap(state: State<'_, SharedState>) -> CmdResult<Bootstrap
         remember_password: saved_password.is_some(),
         saved_password,
         site_url: store.hosts.first().cloned().unwrap_or_default(),
+        hosts: store.hosts.clone(),
+        preferred_host: store.settings.preferred_host.clone(),
         desktop_supported: !cfg!(target_os = "android"),
         codex_localization_available,
         codex_localization_active,
