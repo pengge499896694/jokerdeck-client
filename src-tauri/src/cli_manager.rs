@@ -71,6 +71,27 @@ async fn detect(bin: &str, version_arg: &str) -> CliStatus {
     }
 }
 
+fn macos_brew_candidates() -> &'static [&'static str] {
+    &["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+}
+
+async fn macos_brew() -> Option<String> {
+    if let Ok(path) = std::env::var("HOMEBREW_PREFIX") {
+        let candidate = std::path::Path::new(&path).join("bin/brew");
+        if candidate.is_file() {
+            return Some(candidate.display().to_string());
+        }
+    }
+    for candidate in macos_brew_candidates() {
+        if std::path::Path::new(candidate).is_file() {
+            return Some((*candidate).to_owned());
+        }
+    }
+    let (ok, output) = sh("/usr/bin/which brew").await;
+    ok.then(|| output.lines().next().unwrap_or_default().trim().to_owned())
+        .filter(|path| !path.is_empty())
+}
+
 pub async fn detect_all() -> CliReport {
     let (node, npm, claude, codex, codex_desktop) = tokio::join!(
         detect("node", "-v"),
@@ -143,13 +164,15 @@ pub async fn install(which_cli: &str) -> (bool, String) {
             if cfg!(windows) {
                 sh("winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements").await
             } else if cfg!(target_os = "macos") {
-                let (brew_ok, brew) = sh("command -v brew").await;
-                if brew_ok && !brew.is_empty() {
-                    let brew = brew.lines().next().unwrap_or("brew").trim();
-                    sh(&format!("\"{brew}\" install node")).await
-                } else {
-                    sh("NONINTERACTIVE=1 /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\" && eval \"$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)\" && brew install node").await
-                }
+                let Some(brew) = macos_brew().await else {
+                    return (
+                        false,
+                        "未检测到 Homebrew。请先在终端安装 Homebrew，再回到客户端重试：\n\
+/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+                            .into(),
+                    );
+                };
+                sh(&format!("\"{}\" install node", brew.replace('"', "\\\""))).await
             } else {
                 (false, "当前平台暂不支持自动安装 Node.js".into())
             }
