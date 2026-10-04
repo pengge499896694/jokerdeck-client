@@ -35,11 +35,17 @@ pub async fn download(
 
 #[cfg(target_os = "macos")]
 pub async fn download(
-    http: &reqwest::Client,
+    _http: &reqwest::Client,
     app_dir: &Path,
     report: &impl Fn(DownloadProgress),
 ) -> Result<InstallResult, String> {
-    download_macos(http, app_dir, report).await
+    // The relay client disables SNI for its own domains; the official CDN
+    // requires standard TLS, so downloads must use an independent client.
+    let http = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("创建官方下载连接失败：{error}"))?;
+    download_macos(&http, app_dir, report).await
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -68,7 +74,7 @@ async fn download_macos(
         .timeout(Duration::from_secs(1800))
         .send()
         .await
-        .map_err(|error| format!("连接 Codex Desktop 下载源失败：{error}"))?
+        .map_err(|error| format!("连接 Codex Desktop 下载源失败：{error}。请检查网络或使用浏览器打开官方安装页 https://developers.openai.com/codex/quickstart"))?
         .error_for_status()
         .map_err(|error| format!("Codex Desktop 下载源返回错误：{error}"))?;
     let total_size = response.content_length();

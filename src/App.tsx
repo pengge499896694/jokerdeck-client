@@ -1050,7 +1050,12 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
       const result = await api.downloadCodexDesktop();
       setLog(result.log || (result.ok ? "安装完成" : "安装失败"));
       setReport(await api.detectClis());
-    } catch (err) { setLog(message(err)); }
+    } catch (err) {
+      const detail = message(err);
+      setLog(detail);
+      setDownloadProgress({ percent: 0, detail: "Codex Desktop 下载失败" });
+      setDownloadDetails((lines) => [...lines.slice(-79), detail]);
+    }
     finally { setBusy(""); }
   };
   const diagnose = async () => {
@@ -1099,6 +1104,8 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
           onClick={() => which === "desktop" ? void downloadCodexDesktop() : install(which)}>
           <Download size={14} />{which === "desktop" ? (busy === "desktop-download" ? "安装中..." : "下载并安装") : busy === which ? "安装中..." : "安装"}</button> : <span className="tag warning">缺失</span>}</div>)}
       {log && <pre className="log">{log}</pre>}
+      {navigator.platform.toLowerCase().includes("mac") && !report?.codex_desktop.installed &&
+        <small className="subtext">下载遇到网络问题？可从 <a href="https://developers.openai.com/codex/quickstart" target="_blank" rel="noopener noreferrer">Codex 官方页面</a> 手动下载并安装，随后点击重新检测。</small>}
       {downloadProgress && <div className="localization-progress" aria-live="polite">
         <div className="localization-progress-heading"><strong>{downloadProgress.detail}</strong><span>{downloadProgress.percent}%</span></div>
         <div className="progress-track" role="progressbar" aria-valuenow={downloadProgress.percent} aria-valuemin={0} aria-valuemax={100}>
@@ -1116,6 +1123,7 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
       </div>
     </section>
     <section className="section"><div className="section-header"><h2>Codex Desktop 汉化</h2></div>
+      <p className="subtext">此功能只适用于 Codex.app，ChatGPT.app 是另一款应用，不能作为 Codex Desktop 检测或汉化。</p>
       <p className="subtext">{navigator.platform.toLowerCase().includes("mac")
         ? "macOS 使用 Codex 原生语言设置切换为简体中文，设置后重新启动生效。"
         : "Windows 使用非官方中文补丁（xqnode/codex-zh-CN v0.1.2），首次启动汉化版时会自动下载并校验语言包，可能需要管理员授权。"}</p>

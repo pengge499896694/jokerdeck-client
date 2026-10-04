@@ -1,5 +1,5 @@
 更新内容：
 
-- 修复 Intel Mac 自动安装 Node.js 失败：改用 Node.js 官方 LTS 安装包，校验 SHA-256 后请求 macOS 管理员授权。
-- 修复 macOS 图形界面启动时找不到 `/usr/local/bin`，导致已安装的 Node.js、npm 显示为未检测到。
-- 充值服务条款更新：首次通过本站充值或订阅购买前，须阅读并确认当前版本的适用范围及发票说明；不同意者请勿付款。确认记录由服务端保存；第三方店铺仅限制本站入口，不限制直接访问第三方网站。
+- 修复 macOS 上 Claude Code 和 Codex CLI 使用全局 npm 安装时遇到的 `/usr/local` 权限错误：Claude Code 改用官方原生安装器，Codex CLI 安装到用户目录。
+- 修复 Codex Desktop 官方下载源的 TLS 连接问题；下载失败时显示错误和官方手动下载入口。
+- 支持检测安装在 `~/Applications` 的 Codex.app，并明确区分 ChatGPT.app 与 Codex.app，避免错误启用 Codex 汉化。

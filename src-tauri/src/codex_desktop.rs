@@ -119,10 +119,16 @@ pub(crate) fn patched_app_dir() -> Option<PathBuf> {
 
 /// macOS：定位已安装的 Codex.app。
 pub(crate) fn macos_codex_app() -> Option<PathBuf> {
-    let app = PathBuf::from("/Applications/Codex.app");
-    app.join("Contents/Resources/app.asar")
-        .is_file()
-        .then_some(app)
+    let mut candidates = vec![
+        PathBuf::from("/Applications/Codex.app"),
+        PathBuf::from("/System/Applications/Codex.app"),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join("Applications/Codex.app"));
+    }
+    candidates
+        .into_iter()
+        .find(|app| app.join("Contents/Resources/app.asar").is_file())
 }
 
 /// 把 `~/.codex/config.toml` 的 `[desktop] localeOverride` 设为 `zh-CN`，保留其余内容。

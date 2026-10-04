@@ -39,7 +39,10 @@ async fn sh_with_timeout(command: &str, seconds: u64) -> (bool, String) {
     cmd.env(
         "PATH",
         format!(
-            "/opt/homebrew/bin:/usr/local/bin:{}",
+            "{}/.local/bin:/opt/homebrew/bin:/usr/local/bin:{}",
+            dirs::home_dir()
+                .map(|home| home.display().to_string())
+                .unwrap_or_default(),
             std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin:/usr/sbin:/sbin".into())
         ),
     );
@@ -270,25 +273,39 @@ async fn detect_codex_desktop() -> CliStatus {
     }
     #[cfg(target_os = "macos")]
     {
-        for path in ["/Applications/Codex.app", "/System/Applications/Codex.app"] {
-            if std::path::Path::new(path).exists() {
-                return CliStatus {
-                    installed: true,
-                    version: None,
-                    path: Some(path.into()),
-                };
-            }
+        if let Some(path) = crate::codex_desktop::macos_codex_app() {
+            return CliStatus {
+                installed: true,
+                version: None,
+                path: Some(path.display().to_string()),
+            };
         }
     }
     CliStatus::default()
 }
 
-/// Install a CLI. `claude`/`codex` go through npm; Node uses the native
-/// package manager for the current desktop platform.
+/// Install a CLI. On macOS, avoid the system-owned npm global prefix.
 pub async fn install(which_cli: &str) -> (bool, String) {
     match which_cli {
+        "claude" if cfg!(target_os = "macos") => {
+            sh_with_timeout(
+                r#"tmp="$(mktemp)" || exit 1
+trap 'rm -f "$tmp"' EXIT
+curl -fLsS --retry 2 --connect-timeout 15 --max-time 120 https://claude.ai/install.sh -o "$tmp" || exit 1
+bash "$tmp" || exit 1
+printf '\n如终端找不到 claude，请将 $HOME/.local/bin 加入 PATH。\n'"#,
+                1200,
+            )
+            .await
+        }
         "claude" => sh("npm i -g @anthropic-ai/claude-code").await,
         // Codex CLI (the "ChatGPT/Codex" coding CLI that can be pointed at a relay).
+        "codex" if cfg!(target_os = "macos") => {
+            sh(
+                r#"npm --prefix "$HOME/.local" install -g @openai/codex && printf '\n如终端找不到 codex，请将 $HOME/.local/bin 加入 PATH。\n'"#,
+            )
+            .await
+        }
         "codex" => sh("npm i -g @openai/codex").await,
         "node" => {
             if cfg!(windows) {
