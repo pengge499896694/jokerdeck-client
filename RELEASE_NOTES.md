@@ -1,9 +1,5 @@
 更新内容：
 
-- Codex Desktop 下载改为客户端内直接安装：macOS 流式下载官方 DMG，Windows 使用 Microsoft Store 官方包。
-- 下载与安装过程使用客户端进度条和详情日志展示，不再打开官网页面。
-- 修复 macOS 站点 WebView 覆盖关闭确认框的问题。
-- Homebrew 官方脚本连接中断时自动切换 CDN 下载源。
-
-- macOS 安装 Node.js 时先检测 Homebrew；未安装则自动下载安装并重新检测。
-- Homebrew 安装失败时停止后续步骤，并在客户端显示具体错误。
+- 修复 Intel Mac 自动安装 Node.js 失败：改用 Node.js 官方 LTS 安装包，校验 SHA-256 后请求 macOS 管理员授权。
+- 修复 macOS 图形界面启动时找不到 `/usr/local/bin`，导致已安装的 Node.js、npm 显示为未检测到。
+- 充值服务条款更新：首次通过本站充值或订阅购买前，须阅读并确认当前版本的适用范围及发票说明；不同意者请勿付款。确认记录由服务端保存；第三方店铺仅限制本站入口，不限制直接访问第三方网站。

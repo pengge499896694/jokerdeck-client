@@ -35,6 +35,14 @@ async fn sh_with_timeout(command: &str, seconds: u64) -> (bool, String) {
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(args);
     cmd.kill_on_drop(true);
+    #[cfg(target_os = "macos")]
+    cmd.env(
+        "PATH",
+        format!(
+            "/opt/homebrew/bin:/usr/local/bin:{}",
+            std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin:/usr/sbin:/sbin".into())
+        ),
+    );
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     match tokio::time::timeout(std::time::Duration::from_secs(seconds), cmd.output()).await {
@@ -124,6 +132,96 @@ NONINTERACTIVE=1 /bin/bash "$tmp""#,
     .await
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn latest_macos_node_lts(index: &serde_json::Value) -> Option<&str> {
+    index.as_array()?.iter().find_map(|release| {
+        let version = release.get("version")?.as_str()?;
+        let has_pkg = release
+            .get("files")?
+            .as_array()?
+            .iter()
+            .any(|file| file.as_str() == Some("osx-x64-pkg"));
+        (release.get("lts")?.as_str().is_some()
+            && has_pkg
+            && version.starts_with('v')
+            && version[1..].chars().all(|c| c.is_ascii_digit() || c == '.')
+            && version[1..].split('.').count() == 3
+            && version[1..].split('.').all(|part| !part.is_empty()))
+        .then_some(version)
+    })
+}
+
+#[cfg(target_os = "macos")]
+async fn install_macos_node_pkg() -> (bool, String) {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return (false, format!("创建下载客户端失败：{error}")),
+    };
+    let index = async {
+        client
+            .get("https://nodejs.org/dist/index.json")
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<serde_json::Value>()
+            .await
+    }
+    .await;
+    let index = match index {
+        Ok(index) => index,
+        Err(error) => return (false, format!("获取 Node.js 官方版本列表失败：{error}")),
+    };
+    let Some(version) = latest_macos_node_lts(&index) else {
+        return (
+            false,
+            "Node.js 官方版本列表中没有可用的 macOS LTS 安装包".into(),
+        );
+    };
+    let script = format!(
+        r#"set -eu
+tmp="$(/usr/bin/mktemp -d /tmp/jokerdeck-node.XXXXXXXX)" || exit 1
+trap '/bin/rm -f "$tmp/SHASUMS256.txt" "$tmp/node.pkg"; /bin/rmdir "$tmp"' EXIT
+base="https://nodejs.org/dist/{version}"
+printf '正在下载 Node.js {version} 官方 macOS 安装包...\n'
+/usr/bin/curl -fLsS --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 60 "$base/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt" || exit 1
+expected="$(/usr/bin/awk '$2 == "node-{version}.pkg" {{print $1}}' "$tmp/SHASUMS256.txt")"
+if [ -z "$expected" ]; then
+  printf '官方校验文件中没有匹配的安装包。\n'
+  exit 1
+fi
+/usr/bin/curl -fLsS --retry 3 --retry-delay 2 --connect-timeout 30 --max-time 900 "$base/node-{version}.pkg" -o "$tmp/node.pkg" || exit 1
+printf '%s  %s\n' "$expected" "$tmp/node.pkg" | /usr/bin/shasum -a 256 -c - || exit 1
+printf '校验通过，正在请求 macOS 管理员授权...\n'
+NODE_INSTALLER_PKG="$tmp/node.pkg" /usr/bin/osascript -e 'do shell script "/usr/sbin/installer -pkg " & quoted form of (system attribute "NODE_INSTALLER_PKG") & " -target /" with administrator privileges'
+printf 'Node.js {version} 安装完成。\n'"#
+    );
+    let (ok, output) = sh_with_timeout(&script, 1800).await;
+    if !ok {
+        return (false, format!("Node.js 官方安装包安装失败：\n{output}"));
+    }
+    let node = detect("node", "-v").await;
+    let npm = detect("npm", "-v").await;
+    if !node.installed || !npm.installed {
+        return (
+            false,
+            format!(
+                "安装器已完成，但客户端未检测到 Node.js 或 npm，请重新打开客户端后检测。\n{output}"
+            ),
+        );
+    }
+    (
+        true,
+        format!(
+            "{output}\n检测到 Node.js {}、npm {}",
+            node.version.unwrap_or_default(),
+            npm.version.unwrap_or_default()
+        ),
+    )
+}
+
 pub async fn detect_all() -> CliReport {
     let (node, npm, claude, codex, codex_desktop) = tokio::join!(
         detect("node", "-v"),
@@ -195,6 +293,11 @@ pub async fn install(which_cli: &str) -> (bool, String) {
         "node" => {
             if cfg!(windows) {
                 sh("winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements").await
+            } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+                #[cfg(target_os = "macos")]
+                return install_macos_node_pkg().await;
+                #[allow(unreachable_code)]
+                (false, "当前平台暂不支持自动安装 Node.js".into())
             } else if cfg!(target_os = "macos") {
                 let mut details = String::from("正在检测 Homebrew…");
                 let brew = if let Some(path) = macos_brew().await {
@@ -235,5 +338,29 @@ pub async fn install(which_cli: &str) -> (bool, String) {
             }
         }
         other => (false, format!("未知的安装目标: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::latest_macos_node_lts;
+
+    #[test]
+    fn picks_latest_lts_with_macos_pkg() {
+        let index = serde_json::json!([
+            {"version": "v26.0.0", "lts": false, "files": ["osx-x64-pkg"]},
+            {"version": "v24.21.0", "lts": "Krypton", "files": ["osx-x64-pkg"]},
+            {"version": "v22.20.0", "lts": "Jod", "files": ["osx-x64-pkg"]}
+        ]);
+        assert_eq!(latest_macos_node_lts(&index), Some("v24.21.0"));
+    }
+
+    #[test]
+    fn rejects_missing_package_and_unsafe_version() {
+        let index = serde_json::json!([
+            {"version": "v24.21.0;echo", "lts": "Krypton", "files": ["osx-x64-pkg"]},
+            {"version": "v24.21.0", "lts": "Krypton", "files": ["osx-arm64-tar"]}
+        ]);
+        assert_eq!(latest_macos_node_lts(&index), None);
     }
 }
