@@ -117,18 +117,44 @@ pub(crate) fn patched_app_dir() -> Option<PathBuf> {
         .then_some(app)
 }
 
-/// macOS：定位已安装的 Codex.app。
+fn is_codex_bundle_id(identifier: &str) -> bool {
+    let identifier = identifier.to_ascii_lowercase();
+    ["com.openai.codex", "com.openai.chatgpt", "com.openai.chat"]
+        .iter()
+        .any(|id| identifier == *id || identifier.starts_with(&format!("{id}.")))
+}
+
+/// macOS: the Codex shell can be packaged as Codex.app or ChatGPT.app.
+/// Only treat ChatGPT.app as Codex when its bundle identifier and Electron
+/// resources identify the unified desktop app, not the native Classic app.
 pub(crate) fn macos_codex_app() -> Option<PathBuf> {
-    let mut candidates = vec![
-        PathBuf::from("/Applications/Codex.app"),
-        PathBuf::from("/System/Applications/Codex.app"),
+    let mut roots = vec![
+        PathBuf::from("/Applications"),
+        PathBuf::from("/System/Applications"),
     ];
     if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join("Applications/Codex.app"));
+        roots.push(home.join("Applications"));
     }
-    candidates
-        .into_iter()
-        .find(|app| app.join("Contents/Resources/app.asar").is_file())
+    for root in roots {
+        for name in ["Codex.app", "ChatGPT.app"] {
+            let app = root.join(name);
+            if !app.join("Contents/Resources/app.asar").is_file() {
+                continue;
+            }
+            let plist = app.join("Contents/Info.plist");
+            let identifier = std::process::Command::new("/usr/libexec/PlistBuddy")
+                .args(["-c", "Print CFBundleIdentifier"])
+                .arg(&plist)
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
+            if identifier.as_deref().is_some_and(is_codex_bundle_id) {
+                return Some(app);
+            }
+        }
+    }
+    None
 }
 
 /// 把 `~/.codex/config.toml` 的 `[desktop] localeOverride` 设为 `zh-CN`，保留其余内容。
@@ -249,7 +275,10 @@ async fn stop() {
     if cfg!(windows) {
         let _ = powershell(WINDOWS_STOP_SCRIPT, &[], 20).await;
     } else if cfg!(target_os = "macos") {
-        let _ = run_tool("pkill", &["-f", "Codex.app/Contents/MacOS"]).await;
+        if let Some(app) = macos_codex_app() {
+            let executable_dir = app.join("Contents/MacOS");
+            let _ = run_tool("pkill", &["-f", &executable_dir.to_string_lossy()]).await;
+        }
         tokio::time::sleep(Duration::from_millis(400)).await;
     }
 }
@@ -328,7 +357,8 @@ pub async fn launch_localized() -> Result<String> {
         }
         Ok(format!("已启动汉化版 Codex；{repair}。"))
     } else if cfg!(target_os = "macos") {
-        let app = macos_codex_app().ok_or_else(|| anyhow!("未找到 /Applications/Codex.app"))?;
+        let app = macos_codex_app()
+            .ok_or_else(|| anyhow!("未找到 Codex Desktop 应用，请重新检测安装位置"))?;
         stop().await;
         set_locale_zh_cn()?;
         let (ok, log) = launch_macos(&app).await?;
@@ -376,6 +406,20 @@ pub async fn restart(localized_active: bool) -> (bool, String) {
     match launch_english().await {
         Ok(message) => (true, message),
         Err(error) => (false, error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod macos_detection_tests {
+    use super::is_codex_bundle_id;
+
+    #[test]
+    fn recognizes_codex_but_not_regular_chatgpt_bundle() {
+        assert!(is_codex_bundle_id("com.openai.codex"));
+        assert!(is_codex_bundle_id("com.openai.codex.beta"));
+        assert!(is_codex_bundle_id("com.openai.ChatGPT"));
+        assert!(is_codex_bundle_id("com.openai.chat"));
+        assert!(!is_codex_bundle_id("com.openai.codexplus"));
     }
 }
 #[cfg(test)]

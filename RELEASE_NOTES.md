@@ -1,5 +1,5 @@
 更新内容：
 
-- 修复 macOS 上 Claude Code 和 Codex CLI 使用全局 npm 安装时遇到的 `/usr/local` 权限错误：Claude Code 改用官方原生安装器，Codex CLI 安装到用户目录。
-- 修复 Codex Desktop 官方下载源的 TLS 连接问题；下载失败时显示错误和官方手动下载入口。
-- 支持检测安装在 `~/Applications` 的 Codex.app，并明确区分 ChatGPT.app 与 Codex.app，避免错误启用 Codex 汉化。
+- macOS Claude Code 安装改用阿里云 npm 镜像和用户目录，避免安装源返回 HTML 或写入 `/usr/local` 失败。
+- 识别 macOS 新版 ChatGPT Desktop 中的 Codex 界面，并单独提示不支持 Codex 汉化的 ChatGPT Classic。
+- Codex Desktop 手动下载入口新增 Apple Silicon / Intel 官方 DMG 直链，避免旧文档页面返回 403。

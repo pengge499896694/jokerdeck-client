@@ -74,7 +74,11 @@ async fn download_macos(
         .timeout(Duration::from_secs(1800))
         .send()
         .await
-        .map_err(|error| format!("连接 Codex Desktop 下载源失败：{error}。请检查网络或使用浏览器打开官方安装页 https://developers.openai.com/codex/quickstart"))?
+        .map_err(|error| {
+            format!(
+                "连接 Codex Desktop 下载源失败：{error}。可在浏览器直接下载官方安装包：{MAC_URL}"
+            )
+        })?
         .error_for_status()
         .map_err(|error| format!("Codex Desktop 下载源返回错误：{error}"))?;
     let total_size = response.content_length();

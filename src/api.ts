@@ -107,6 +107,7 @@ export interface CliReport {
   claude: CliStatus;
   codex: CliStatus;
   codex_desktop: CliStatus;
+  chatgpt_desktop: CliStatus;
 }
 export interface InstallResult {
   ok: boolean;

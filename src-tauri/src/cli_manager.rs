@@ -14,6 +14,7 @@ pub struct CliReport {
     pub claude: CliStatus,
     pub codex: CliStatus,
     pub codex_desktop: CliStatus,
+    pub chatgpt_desktop: CliStatus,
 }
 
 /// Windows: don't flash a console window when we shell out to node/npm/winget.
@@ -239,7 +240,31 @@ pub async fn detect_all() -> CliReport {
         claude,
         codex,
         codex_desktop,
+        chatgpt_desktop: detect_chatgpt_desktop(),
     }
+}
+
+fn detect_chatgpt_desktop() -> CliStatus {
+    if !cfg!(target_os = "macos") {
+        return CliStatus::default();
+    }
+    let mut roots = vec![std::path::PathBuf::from("/Applications")];
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join("Applications"));
+    }
+    for root in roots {
+        for name in ["ChatGPT.app", "ChatGPT Classic.app"] {
+            let app = root.join(name);
+            if app.join("Contents/Info.plist").is_file() {
+                return CliStatus {
+                    installed: true,
+                    version: None,
+                    path: Some(app.display().to_string()),
+                };
+            }
+        }
+    }
+    CliStatus::default()
 }
 
 async fn detect_codex_desktop() -> CliStatus {
@@ -289,11 +314,7 @@ pub async fn install(which_cli: &str) -> (bool, String) {
     match which_cli {
         "claude" if cfg!(target_os = "macos") => {
             sh_with_timeout(
-                r#"tmp="$(mktemp)" || exit 1
-trap 'rm -f "$tmp"' EXIT
-curl -fLsS --retry 2 --connect-timeout 15 --max-time 120 https://claude.ai/install.sh -o "$tmp" || exit 1
-bash "$tmp" || exit 1
-printf '\n如终端找不到 claude，请将 $HOME/.local/bin 加入 PATH。\n'"#,
+                r#"npm --prefix "$HOME/.local" install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com && printf '\n如终端找不到 claude，请将 $HOME/.local/bin 加入 PATH。\n'"#,
                 1200,
             )
             .await

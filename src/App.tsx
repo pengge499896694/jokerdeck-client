@@ -1098,14 +1098,18 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
       {([
         ["Node.js", "node", report?.node], ["npm", "", report?.npm], ["Claude Code", "claude", report?.claude],
         ["Codex CLI", "codex", report?.codex], ["Codex Desktop", "desktop", report?.codex_desktop],
+        ...(navigator.platform.toLowerCase().includes("mac") && report?.chatgpt_desktop.installed && !report?.codex_desktop.installed
+          ? [["ChatGPT Desktop", "", report.chatgpt_desktop] as const] : []),
       ] as const).map(([label, which, item]) => <div className="list-row" key={label}><span className="row"><Monitor size={18} />
         <span><strong>{label}</strong><small className="subtext">{item?.version ?? (item?.installed ? "已检测到" : "未检测到")}</small></span></span>
         {item?.installed ? <span className="tag success">已安装</span> : which ? <button className="btn small" disabled={!!busy || boot?.desktop_supported === false}
           onClick={() => which === "desktop" ? void downloadCodexDesktop() : install(which)}>
           <Download size={14} />{which === "desktop" ? (busy === "desktop-download" ? "安装中..." : "下载并安装") : busy === which ? "安装中..." : "安装"}</button> : <span className="tag warning">缺失</span>}</div>)}
       {log && <pre className="log">{log}</pre>}
+      {navigator.platform.toLowerCase().includes("mac") && report?.chatgpt_desktop.installed && !report?.codex_desktop.installed &&
+        <small className="subtext">已检测到 {report.chatgpt_desktop.path}，但不是支持 Codex 的新版 ChatGPT Desktop（旧版 Classic 不支持此处汉化）。请安装新版后重新检测。</small>}
       {navigator.platform.toLowerCase().includes("mac") && !report?.codex_desktop.installed &&
-        <small className="subtext">下载遇到网络问题？可从 <a href="https://developers.openai.com/codex/quickstart" target="_blank" rel="noopener noreferrer">Codex 官方页面</a> 手动下载并安装，随后点击重新检测。</small>}
+        <small className="subtext">下载遇到网络问题？<a href="https://persistent.oaistatic.com/codex-app-prod/Codex.dmg" target="_blank" rel="noopener noreferrer">Apple Silicon DMG</a> · <a href="https://persistent.oaistatic.com/codex-app-prod/Codex-latest-x64.dmg" target="_blank" rel="noopener noreferrer">Intel DMG</a> · <a href="https://learn.chatgpt.com/docs/app" target="_blank" rel="noopener noreferrer">官方应用页</a>。安装后点击重新检测。</small>}
       {downloadProgress && <div className="localization-progress" aria-live="polite">
         <div className="localization-progress-heading"><strong>{downloadProgress.detail}</strong><span>{downloadProgress.percent}%</span></div>
         <div className="progress-track" role="progressbar" aria-valuenow={downloadProgress.percent} aria-valuemin={0} aria-valuemax={100}>
@@ -1123,7 +1127,7 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
       </div>
     </section>
     <section className="section"><div className="section-header"><h2>Codex Desktop 汉化</h2></div>
-      <p className="subtext">此功能只适用于 Codex.app，ChatGPT.app 是另一款应用，不能作为 Codex Desktop 检测或汉化。</p>
+      <p className="subtext">macOS 支持新版 ChatGPT Desktop 的 Codex 界面；旧版 ChatGPT Classic 不适用。</p>
       <p className="subtext">{navigator.platform.toLowerCase().includes("mac")
         ? "macOS 使用 Codex 原生语言设置切换为简体中文，设置后重新启动生效。"
         : "Windows 使用非官方中文补丁（xqnode/codex-zh-CN v0.1.2），首次启动汉化版时会自动下载并校验语言包，可能需要管理员授权。"}</p>
