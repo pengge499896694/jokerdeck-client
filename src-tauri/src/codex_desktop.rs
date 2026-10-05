@@ -135,6 +135,17 @@ fn macos_bundle_id(app: &Path) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn macos_executable(app: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print CFBundleExecutable"])
+        .arg(app.join("Contents/Info.plist"))
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!name.is_empty()).then(|| app.join("Contents/MacOS").join(name))
+}
+
 /// macOS: the Codex shell can be packaged as Codex.app or ChatGPT.app.
 /// Only treat ChatGPT.app as Codex when its bundle identifier and Electron
 /// resources identify the unified desktop app, not the native Classic app.
@@ -379,13 +390,37 @@ Start-Process -FilePath $path -WorkingDirectory (Split-Path -Parent $path)"#;
 }
 
 async fn launch_macos(app_bundle: &Path, localized: bool) -> Result<(bool, String)> {
-    let app = app_bundle.to_string_lossy().into_owned();
-    let mut args = vec!["-n".to_owned(), app];
-    if localized {
-        args.extend(["--args".to_owned(), "--lang=zh-CN".to_owned()]);
+    if let Some(executable) = macos_executable(app_bundle).filter(|path| path.is_file()) {
+        let mut command = tokio::process::Command::new(&executable);
+        command
+            .current_dir(app_bundle.join("Contents/Resources"))
+            .env(
+                "LANG",
+                if localized {
+                    "zh_CN.UTF-8"
+                } else {
+                    "en_US.UTF-8"
+                },
+            )
+            .env(
+                "LC_ALL",
+                if localized {
+                    "zh_CN.UTF-8"
+                } else {
+                    "en_US.UTF-8"
+                },
+            )
+            .kill_on_drop(true);
+        if localized {
+            command.arg("--lang=zh-CN");
+        }
+        command
+            .spawn()
+            .with_context(|| format!("无法启动 {}", executable.display()))?;
+        return Ok((true, "已直接启动 Codex Desktop".into()));
     }
-    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_tool("open", &args).await
+    let app = app_bundle.to_string_lossy().into_owned();
+    run_tool("open", &["-n", &app]).await
 }
 
 /// 启动「汉化版」Codex：关闭现有进程 → 校正完整性 → 写入 zh-CN → 启动补丁副本。

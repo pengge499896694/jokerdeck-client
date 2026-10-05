@@ -319,10 +319,14 @@ prefix="$HOME/.local"
 npm --prefix "$prefix" install -g @anthropic-ai/claude-code \
   --registry=https://registry.npmmirror.com \
   --allow-scripts=@anthropic-ai/claude-code
+package_dir="$prefix/lib/node_modules/@anthropic-ai/claude-code"
+if [ -f "$package_dir/install.cjs" ]; then
+  (cd "$package_dir" && node install.cjs)
+fi
 bin="$prefix/bin/claude"
 if [ ! -x "$bin" ]; then
-  printf 'Claude Code 安装包已下载，但 postinstall 未生成 claude 命令。\n'
-  printf '请检查 npm 的 allow-scripts 配置后重试。\n'
+  printf 'Claude Code 安装包已下载，但 native binary 未生成。\n'
+  printf '请检查网络或重新运行安装。\n'
   exit 1
 fi
 "$bin" --version
