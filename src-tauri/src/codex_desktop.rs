@@ -124,6 +124,17 @@ fn is_codex_bundle_id(identifier: &str) -> bool {
         .any(|id| identifier == *id || identifier.starts_with(&format!("{id}.")))
 }
 
+fn macos_bundle_id(app: &Path) -> Option<String> {
+    std::process::Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print CFBundleIdentifier"])
+        .arg(app.join("Contents/Info.plist"))
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
 /// macOS: the Codex shell can be packaged as Codex.app or ChatGPT.app.
 /// Only treat ChatGPT.app as Codex when its bundle identifier and Electron
 /// resources identify the unified desktop app, not the native Classic app.
@@ -141,20 +152,48 @@ pub(crate) fn macos_codex_app() -> Option<PathBuf> {
             if !app.join("Contents/Resources/app.asar").is_file() {
                 continue;
             }
-            let plist = app.join("Contents/Info.plist");
-            let identifier = std::process::Command::new("/usr/libexec/PlistBuddy")
-                .args(["-c", "Print CFBundleIdentifier"])
-                .arg(&plist)
-                .output()
-                .ok()
-                .filter(|output| output.status.success())
-                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
-            if identifier.as_deref().is_some_and(is_codex_bundle_id) {
+            if macos_bundle_id(&app)
+                .as_deref()
+                .is_some_and(is_codex_bundle_id)
+            {
                 return Some(app);
             }
         }
     }
     None
+}
+
+/// macOS Electron apps may ignore Codex's TOML override unless the native
+/// language preference and Chromium locale are set at launch time as well.
+pub(crate) async fn set_macos_locale(locale: Option<&str>) -> Result<()> {
+    let Some(app) = macos_codex_app() else {
+        bail!("未找到 Codex Desktop 应用，请重新检测安装位置");
+    };
+    let Some(bundle_id) = macos_bundle_id(&app) else {
+        bail!("无法读取 Codex Desktop 的 bundle ID");
+    };
+    match locale {
+        Some("zh-CN") => {
+            run_tool(
+                "defaults",
+                &[
+                    "write",
+                    &bundle_id,
+                    "AppleLanguages",
+                    "-array",
+                    "zh-Hans",
+                    "en-US",
+                ],
+            )
+            .await?;
+            run_tool("defaults", &["write", &bundle_id, "AppleLocale", "zh_CN"]).await?;
+        }
+        _ => {
+            let _ = run_tool("defaults", &["delete", &bundle_id, "AppleLanguages"]).await;
+            let _ = run_tool("defaults", &["delete", &bundle_id, "AppleLocale"]).await;
+        }
+    }
+    Ok(())
 }
 
 /// 把 `~/.codex/config.toml` 的 `[desktop] localeOverride` 设为 `zh-CN`，保留其余内容。
@@ -339,8 +378,14 @@ Start-Process -FilePath $path -WorkingDirectory (Split-Path -Parent $path)"#;
     powershell(SCRIPT, &[], 30).await
 }
 
-async fn launch_macos(app_bundle: &Path) -> Result<(bool, String)> {
-    run_tool("open", &["-n", &app_bundle.to_string_lossy()]).await
+async fn launch_macos(app_bundle: &Path, localized: bool) -> Result<(bool, String)> {
+    let app = app_bundle.to_string_lossy().into_owned();
+    let mut args = vec!["-n".to_owned(), app];
+    if localized {
+        args.extend(["--args".to_owned(), "--lang=zh-CN".to_owned()]);
+    }
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_tool("open", &args).await
 }
 
 /// 启动「汉化版」Codex：关闭现有进程 → 校正完整性 → 写入 zh-CN → 启动补丁副本。
@@ -360,8 +405,9 @@ pub async fn launch_localized() -> Result<String> {
         let app = macos_codex_app()
             .ok_or_else(|| anyhow!("未找到 Codex Desktop 应用，请重新检测安装位置"))?;
         stop().await;
+        set_macos_locale(Some("zh-CN")).await?;
         set_locale_zh_cn()?;
-        let (ok, log) = launch_macos(&app).await?;
+        let (ok, log) = launch_macos(&app, true).await?;
         if !ok {
             bail!("启动 Codex 失败：{log}");
         }
@@ -373,6 +419,9 @@ pub async fn launch_localized() -> Result<String> {
 
 /// 启动官方英文版 Codex，并清除可能残留的中文语言覆盖。
 pub async fn launch_english() -> Result<String> {
+    if cfg!(target_os = "macos") {
+        let _ = set_macos_locale(None).await;
+    }
     clear_locale_zh_cn()?;
     stop().await;
     let launched = if cfg!(windows) {
@@ -382,7 +431,7 @@ pub async fn launch_english() -> Result<String> {
         }
     } else if cfg!(target_os = "macos") {
         match macos_codex_app() {
-            Some(app) => launch_macos(&app).await,
+            Some(app) => launch_macos(&app, false).await,
             None => run_tool("open", &["-a", "Codex"]).await,
         }
     } else {

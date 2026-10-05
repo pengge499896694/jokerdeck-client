@@ -1,6 +1,6 @@
 [package]
 name = "jokerdeck-desktop"
-version = "0.1.17"
+version = "0.1.18"
 description = "jokerdeck client for the sub2api relay"
 authors = ["jokerdeck"]
 edition = "2021"

@@ -314,7 +314,19 @@ pub async fn install(which_cli: &str) -> (bool, String) {
     match which_cli {
         "claude" if cfg!(target_os = "macos") => {
             sh_with_timeout(
-                r#"npm --prefix "$HOME/.local" install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com && printf '\n如终端找不到 claude，请将 $HOME/.local/bin 加入 PATH。\n'"#,
+                r#"set -eu
+prefix="$HOME/.local"
+npm --prefix "$prefix" install -g @anthropic-ai/claude-code \
+  --registry=https://registry.npmmirror.com \
+  --allow-scripts=@anthropic-ai/claude-code
+bin="$prefix/bin/claude"
+if [ ! -x "$bin" ]; then
+  printf 'Claude Code 安装包已下载，但 postinstall 未生成 claude 命令。\n'
+  printf '请检查 npm 的 allow-scripts 配置后重试。\n'
+  exit 1
+fi
+"$bin" --version
+printf '\nClaude Code 已安装到 %s\n如终端找不到 claude，请将 $HOME/.local/bin 加入 PATH。\n' "$bin""#,
                 1200,
             )
             .await
