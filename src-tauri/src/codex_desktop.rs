@@ -135,6 +135,17 @@ fn macos_bundle_id(app: &Path) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn macos_executable(app: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print CFBundleExecutable"])
+        .arg(app.join("Contents/Info.plist"))
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!name.is_empty()).then(|| app.join("Contents/MacOS").join(name))
+}
+
 /// macOS: the Codex shell can be packaged as Codex.app or ChatGPT.app.
 /// Only treat ChatGPT.app as Codex when its bundle identifier and Electron
 /// resources identify the unified desktop app, not the native Classic app.
@@ -442,18 +453,34 @@ Start-Process -FilePath $path -WorkingDirectory (Split-Path -Parent $path)"#;
 }
 
 async fn launch_macos(app_bundle: &Path, localized: bool) -> Result<(bool, String)> {
-    if !app_bundle.is_dir() {
-        bail!("Codex Desktop 应用目录不存在");
-    }
-    let app = app_bundle.to_string_lossy().into_owned();
-    let mut args = vec!["-n", "-a", app.as_str()];
+    let executable = macos_executable(app_bundle)
+        .filter(|path| path.is_file())
+        .ok_or_else(|| anyhow!("Codex Desktop 缺少可执行文件"))?;
+    let mut command = tokio::process::Command::new(&executable);
+    command
+        .current_dir(app_bundle.join("Contents/Resources"))
+        .env(
+            "LANG",
+            if localized {
+                "zh_CN.UTF-8"
+            } else {
+                "en_US.UTF-8"
+            },
+        )
+        .env(
+            "LC_ALL",
+            if localized {
+                "zh_CN.UTF-8"
+            } else {
+                "en_US.UTF-8"
+            },
+        );
     if localized {
-        args.extend(["--args", "--lang=zh-CN"]);
+        command.arg("--lang=zh-CN");
     }
-    let (ok, log) = run_tool("open", &args).await?;
-    if !ok {
-        bail!("无法启动 Codex Desktop：{log}");
-    }
+    command
+        .spawn()
+        .with_context(|| format!("无法启动 {}", executable.display()))?;
     for _ in 0..20 {
         if macos_app_running(app_bundle).await? {
             let Some(bundle_id) = macos_bundle_id(app_bundle) else {
