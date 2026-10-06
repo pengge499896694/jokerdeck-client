@@ -317,15 +317,38 @@ pub async fn install(which_cli: &str) -> (bool, String) {
                 r#"set -eu
 installer="$(mktemp)" || exit 1
 trap 'rm -f "$installer"' EXIT
-curl -fLsS --retry 3 --connect-timeout 15 --max-time 120 https://claude.ai/install.sh -o "$installer"
-if ! grep -q 'claude' "$installer"; then
-  printf 'Claude Code 官方安装脚本内容异常。\n'
-  exit 1
-fi
-/bin/bash "$installer"
+script_ok=0
+for url in \
+  https://claude.ai/install.sh \
+  https://cdn.jsdelivr.net/gh/anthropics/claude-code@latest/install.sh; do
+  : > "$installer"
+  if curl -fLsS --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 \
+      -H 'Accept: text/plain, application/x-sh' "$url" -o "$installer" \
+      && [ -s "$installer" ] \
+      && ! grep -Eiq '<!doctype|<html|<head|/_next/static|anthropicson' "$installer" \
+      && grep -Eiq '(^#!.*(sh|bash)|(^|[[:space:]])(curl|uname|npm|node|claude)([[:space:]]|$))' "$installer"; then
+    script_ok=1
+    break
+  fi
+  printf '安装脚本下载源返回的内容不是可执行脚本：%s\n' "$url"
+done
 bin="$HOME/.local/bin/claude"
+if [ "$script_ok" -eq 1 ]; then
+  /bin/bash "$installer" || script_ok=0
+fi
+if [ "$script_ok" -ne 1 ] || [ ! -x "$bin" ]; then
+  printf '正在回退到 npm 官方包安装（启用 optional native dependencies）...\n'
+  prefix="$HOME/.local"
+  npm --prefix "$prefix" install -g @anthropic-ai/claude-code \
+    --registry=https://registry.npmjs.org \
+    --include=optional --foreground-scripts --ignore-scripts=false
+  package_dir="$prefix/lib/node_modules/@anthropic-ai/claude-code"
+  if [ -f "$package_dir/install.cjs" ]; then
+    (cd "$package_dir" && /usr/bin/env node install.cjs)
+  fi
+fi
 if [ ! -x "$bin" ]; then
-  printf '安装器已运行，但未找到 %s。\n' "$bin"
+  printf 'Claude Code 安装失败：native binary 未生成。请检查网络后重试。\n'
   exit 1
 fi
 "$bin" --version
