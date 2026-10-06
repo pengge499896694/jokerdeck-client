@@ -26,10 +26,10 @@ button { color: inherit; }
 .close { height: 40px; width: 44px; border-radius: 0; }
 .close:hover { background: #ef4444; color: white; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: #11182799; }
-.dialog { width: min(440px, 100%); padding: 24px; background: white; border-radius: 8px; box-shadow: 0 16px 48px #11182733; }
+.dialog { width: min(440px, 100%); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; padding: 24px; background: white; border-radius: 8px; box-shadow: 0 16px 48px #11182733; }
 .dialog p { line-height: 1.7; color: #4b5563; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dialog .row { justify-content: flex-end; margin-top: 20px; }
-.update-notes { margin: 16px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.update-notes { max-height: min(360px, 42dvh); margin: 16px 0 0; padding-right: 8px; white-space: pre-wrap; overflow: auto; overflow-wrap: anywhere; }
 .update-progress { margin-top: 18px; }
 .progress-track { height: 7px; overflow: hidden; border-radius: 999px; background: #e5e7eb; }
 .progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--brand); transition: width .2s ease; }

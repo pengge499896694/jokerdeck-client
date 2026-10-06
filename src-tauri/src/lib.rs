@@ -51,6 +51,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            restore_main_window(app);
+        }))
         .setup(|app| {
             let app_dir = app
                 .path()
@@ -145,7 +148,7 @@ pub fn run() {
                     // Right-click is reserved for the native tray menu. Restoring
                     // the window here closes that menu before it can be used.
                     if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
+                        button: MouseButton::Left | MouseButton::Right,
                         button_state: MouseButtonState::Up,
                         ..
                     } = event
