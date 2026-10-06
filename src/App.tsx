@@ -692,7 +692,11 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
     setBusy(true); setError(""); setResult(null);
     try {
       setStatus(await api.stopProxy());
-      flash("本地代理已关闭；再次应用配置即可启动");
+      const next = await refreshBoot();
+      setGroupId(next.preferred_group_id);
+      setClaudeModel(next.claude_model ?? "");
+      setCodexModel(next.codex_model ?? "");
+      flash("本地代理已关闭，工具配置已恢复；再次应用配置即可启动");
     } catch (err) { setError(message(err)); }
     finally { setBusy(false); }
   };

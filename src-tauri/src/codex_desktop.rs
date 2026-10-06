@@ -185,7 +185,7 @@ pub(crate) async fn set_macos_locale(locale: Option<&str>) -> Result<()> {
     };
     match locale {
         Some("zh-CN") => {
-            run_tool(
+            let (ok, log) = run_tool(
                 "defaults",
                 &[
                     "write",
@@ -197,7 +197,14 @@ pub(crate) async fn set_macos_locale(locale: Option<&str>) -> Result<()> {
                 ],
             )
             .await?;
-            run_tool("defaults", &["write", &bundle_id, "AppleLocale", "zh_CN"]).await?;
+            if !ok {
+                bail!("设置 Codex 应用语言失败：{log}");
+            }
+            let (ok, log) =
+                run_tool("defaults", &["write", &bundle_id, "AppleLocale", "zh_CN"]).await?;
+            if !ok {
+                bail!("设置 Codex 地区失败：{log}");
+            }
         }
         _ => {
             let _ = run_tool("defaults", &["delete", &bundle_id, "AppleLanguages"]).await;
@@ -321,16 +328,56 @@ Get-Process -Name ChatGPT, Codex, codex-helper, CodexHelper -ErrorAction Silentl
     Stop-Process -Force
 Start-Sleep -Milliseconds 400"#;
 
-async fn stop() {
+async fn stop() -> Result<()> {
     if cfg!(windows) {
-        let _ = powershell(WINDOWS_STOP_SCRIPT, &[], 20).await;
+        let (ok, log) = powershell(WINDOWS_STOP_SCRIPT, &[], 20).await?;
+        if !ok {
+            bail!("无法关闭 Codex Desktop：{log}");
+        }
     } else if cfg!(target_os = "macos") {
         if let Some(app) = macos_codex_app() {
-            let executable_dir = app.join("Contents/MacOS");
-            let _ = run_tool("pkill", &["-f", &executable_dir.to_string_lossy()]).await;
+            let bundle_id =
+                macos_bundle_id(&app).ok_or_else(|| anyhow!("无法读取 Codex bundle ID"))?;
+            let script = format!("tell application id \"{bundle_id}\" to quit");
+            let _ = run_tool("osascript", &["-e", &script]).await;
+            if let Some(exe) = macos_executable(&app) {
+                for _ in 0..20 {
+                    if !macos_process_running(&exe).await? {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                if macos_process_running(&exe).await? {
+                    bail!("Codex Desktop 未退出，请手动退出后重试");
+                }
+            }
         }
-        tokio::time::sleep(Duration::from_millis(400)).await;
     }
+    Ok(())
+}
+
+fn process_has_executable(output: &str, executable: &Path) -> bool {
+    let exe = executable.to_string_lossy();
+    output.lines().any(|line| {
+        let command = line
+            .trim()
+            .split_once(char::is_whitespace)
+            .map(|(_, cmd)| cmd.trim_start());
+        command.is_some_and(|cmd| {
+            cmd == exe
+                || cmd
+                    .strip_prefix(exe.as_ref())
+                    .is_some_and(|rest| rest.starts_with(' '))
+        })
+    })
+}
+
+async fn macos_process_running(executable: &Path) -> Result<bool> {
+    let (ok, output) = run_tool("ps", &["-axo", "pid=,command="]).await?;
+    if !ok {
+        bail!("无法检查 Codex Desktop 进程：{output}");
+    }
+    Ok(process_has_executable(&output, executable))
 }
 async fn launch_patched_windows(app_dir: &Path) -> Result<(bool, String)> {
     let exe = ["ChatGPT.exe", "Codex.exe", "codex.exe"]
@@ -390,37 +437,25 @@ Start-Process -FilePath $path -WorkingDirectory (Split-Path -Parent $path)"#;
 }
 
 async fn launch_macos(app_bundle: &Path, localized: bool) -> Result<(bool, String)> {
-    if let Some(executable) = macos_executable(app_bundle).filter(|path| path.is_file()) {
-        let mut command = tokio::process::Command::new(&executable);
-        command
-            .current_dir(app_bundle.join("Contents/Resources"))
-            .env(
-                "LANG",
-                if localized {
-                    "zh_CN.UTF-8"
-                } else {
-                    "en_US.UTF-8"
-                },
-            )
-            .env(
-                "LC_ALL",
-                if localized {
-                    "zh_CN.UTF-8"
-                } else {
-                    "en_US.UTF-8"
-                },
-            )
-            .kill_on_drop(true);
-        if localized {
-            command.arg("--lang=zh-CN");
-        }
-        command
-            .spawn()
-            .with_context(|| format!("无法启动 {}", executable.display()))?;
-        return Ok((true, "已直接启动 Codex Desktop".into()));
-    }
+    let executable = macos_executable(app_bundle)
+        .filter(|path| path.is_file())
+        .ok_or_else(|| anyhow!("Codex Desktop 缺少可执行文件"))?;
     let app = app_bundle.to_string_lossy().into_owned();
-    run_tool("open", &["-n", &app]).await
+    let (ok, log) = if localized {
+        run_tool("open", &["-n", "-a", &app, "--args", "--lang=zh-CN"]).await?
+    } else {
+        run_tool("open", &["-n", "-a", &app]).await?
+    };
+    if ok {
+        for _ in 0..20 {
+            if macos_process_running(&executable).await? {
+                return Ok((true, "Codex Desktop 已启动".into()));
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        bail!("macOS 已接受启动请求，但 Codex Desktop 未运行");
+    }
+    Ok((false, log))
 }
 
 /// 启动「汉化版」Codex：关闭现有进程 → 校正完整性 → 写入 zh-CN → 启动补丁副本。
@@ -428,7 +463,7 @@ async fn launch_macos(app_bundle: &Path, localized: bool) -> Result<(bool, Strin
 pub async fn launch_localized() -> Result<String> {
     if cfg!(windows) {
         let app = patched_app_dir().ok_or_else(|| anyhow!("请先安装 Codex 汉化包"))?;
-        stop().await;
+        stop().await?;
         let repair = repair_windows_exes(&app)?;
         set_locale_zh_cn()?;
         let (ok, log) = launch_patched_windows(&app).await?;
@@ -439,7 +474,7 @@ pub async fn launch_localized() -> Result<String> {
     } else if cfg!(target_os = "macos") {
         let app = macos_codex_app()
             .ok_or_else(|| anyhow!("未找到 Codex Desktop 应用，请重新检测安装位置"))?;
-        stop().await;
+        stop().await?;
         set_macos_locale(Some("zh-CN")).await?;
         set_locale_zh_cn()?;
         let (ok, log) = launch_macos(&app, true).await?;
@@ -454,11 +489,11 @@ pub async fn launch_localized() -> Result<String> {
 
 /// 启动官方英文版 Codex，并清除可能残留的中文语言覆盖。
 pub async fn launch_english() -> Result<String> {
+    stop().await?;
     if cfg!(target_os = "macos") {
-        let _ = set_macos_locale(None).await;
+        set_macos_locale(None).await?;
     }
     clear_locale_zh_cn()?;
-    stop().await;
     let launched = if cfg!(windows) {
         match launch_store_windows().await {
             Ok((true, log)) => Ok((true, log)),
@@ -495,7 +530,7 @@ pub async fn restart(localized_active: bool) -> (bool, String) {
 
 #[cfg(test)]
 mod macos_detection_tests {
-    use super::is_codex_bundle_id;
+    use super::{is_codex_bundle_id, process_has_executable};
 
     #[test]
     fn recognizes_codex_but_not_regular_chatgpt_bundle() {
@@ -504,6 +539,19 @@ mod macos_detection_tests {
         assert!(is_codex_bundle_id("com.openai.ChatGPT"));
         assert!(is_codex_bundle_id("com.openai.chat"));
         assert!(!is_codex_bundle_id("com.openai.codexplus"));
+    }
+
+    #[test]
+    fn only_matches_the_selected_app_executable() {
+        let ps = "  43 /Applications/Codex.app/Contents/MacOS/Codex --lang=zh-CN\n  44 /Applications/Codex.app/Contents/MacOS/CodexHelper\n";
+        assert!(process_has_executable(
+            ps,
+            std::path::Path::new("/Applications/Codex.app/Contents/MacOS/Codex")
+        ));
+        assert!(!process_has_executable(
+            ps,
+            std::path::Path::new("/Applications/ChatGPT.app/Contents/MacOS/ChatGPT")
+        ));
     }
 }
 #[cfg(test)]

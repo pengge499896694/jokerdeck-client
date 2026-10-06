@@ -214,6 +214,53 @@ pub fn restore_configs() -> Result<RestoreResult> {
     )
 }
 
+/// A reboot can leave CLI settings pointed at a proxy that only existed in
+/// the previous process. Restore only our own loopback settings.
+pub fn recover_stale_proxy(port: u16) -> Result<bool> {
+    recover_stale_proxy_at(
+        &claude_settings_path()?,
+        &codex_config_path()?,
+        &codex_catalog_path()?,
+        port,
+    )
+}
+
+fn recover_stale_proxy_at(
+    claude_path: &Path,
+    codex_path: &Path,
+    catalog_path: &Path,
+    port: u16,
+) -> Result<bool> {
+    let base = format!("http://127.0.0.1:{port}/");
+    let claude = read_json_object(claude_path)?;
+    let claude_stale = claude["env"]["ANTHROPIC_AUTH_TOKEN"] == "managed-by-jokerdeck"
+        && claude["env"]["ANTHROPIC_BASE_URL"]
+            .as_str()
+            .is_some_and(|url| url.starts_with(&base));
+    let codex = match std::fs::read_to_string(codex_path) {
+        Ok(text) => text.parse::<DocumentMut>()?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(err) => return Err(err.into()),
+    };
+    let codex_stale = codex.get("model_provider").and_then(Item::as_str) == Some(CODEX_PROVIDER)
+        && codex["model_providers"][CODEX_PROVIDER]["base_url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with(&base));
+    if !claude_stale && !codex_stale {
+        return Ok(false);
+    }
+    if std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        std::time::Duration::from_millis(200),
+    )
+    .is_ok()
+    {
+        return Ok(false);
+    }
+    restore_configs_at(claude_path, codex_path, catalog_path)?;
+    Ok(true)
+}
+
 fn restore_configs_at(claude: &Path, codex: &Path, catalog: &Path) -> Result<RestoreResult> {
     let mut changes: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
     let mut warnings = Vec::new();
@@ -819,6 +866,37 @@ mod tests {
         restore_configs_at(&claude, &codex, &catalog).unwrap();
         assert!(!codex.exists());
         assert!(!catalog.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn recovers_owned_stale_loopback_without_touching_unrelated_settings() {
+        let dir = temp_dir();
+        let claude = dir.join("settings.json");
+        let codex = dir.join("config.toml");
+        let catalog = dir.join("models.json");
+        std::fs::write(&claude, r#"{"permissions":{"allow":["Read"]}}"#).unwrap();
+        write_claude_at(
+            &claude,
+            "http://127.0.0.1:49123/groups/7",
+            Some("relay"),
+            &[],
+        )
+        .unwrap();
+        write_codex_at(
+            &codex,
+            &catalog,
+            "http://127.0.0.1:49123/groups/7/v1",
+            Some("relay"),
+            None,
+        )
+        .unwrap();
+        assert!(recover_stale_proxy_at(&claude, &codex, &catalog, 49123).unwrap());
+        let restored = read_json_object(&claude).unwrap();
+        assert_eq!(restored["permissions"]["allow"][0], "Read");
+        assert!(restored["env"].is_null());
+        assert!(!codex.exists());
+        assert!(!recover_stale_proxy_at(&claude, &codex, &catalog, 49123).unwrap());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

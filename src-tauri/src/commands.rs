@@ -788,6 +788,16 @@ pub async fn apply_config(
         };
     }
     transaction.commit();
+    let mut warnings = if configure_claude {
+        config_writer::claude_config_warnings()
+    } else {
+        Vec::new()
+    };
+    if let Err(error) = crate::startup::set_enabled(true) {
+        warnings.push(format!(
+            "登录启动项设置失败，电脑重启后请打开客户端恢复代理配置：{error}"
+        ));
+    }
     Ok(ApplyResult {
         proxy_port: cfg.port,
         base_url: base,
@@ -797,11 +807,7 @@ pub async fn apply_config(
             let ps = state.proxy.read().await;
             ps.groups.get(ps.active_group_idx).map(|g| g.group_id)
         },
-        warnings: if configure_claude {
-            config_writer::claude_config_warnings()
-        } else {
-            Vec::new()
-        },
+        warnings,
     })
 }
 
@@ -1052,7 +1058,8 @@ pub async fn proxy_status(state: State<'_, SharedState>) -> CmdResult<ProxyStatu
 pub async fn stop_proxy(state: State<'_, SharedState>) -> CmdResult<ProxyStatus> {
     let state = state.inner().clone();
     let _guard = state.configuration_lock.lock().await;
-    stop_proxy_inner(&state).await
+    // Never leave CLI clients pointing at a listener that has been stopped.
+    Ok(restore_config_inner(&state).await?.status)
 }
 
 async fn stop_proxy_inner(state: &AppState) -> CmdResult<ProxyStatus> {
@@ -1107,6 +1114,9 @@ async fn restore_config_inner(state: &AppState) -> CmdResult<RestoreConfigResult
         *store = next;
     }
     let status = stop_proxy_inner(&state).await?;
+    if let Err(error) = crate::startup::set_enabled(false) {
+        tracing::warn!("无法撤销代理恢复登录启动项：{error}");
+    }
     Ok(RestoreConfigResult {
         files: restored
             .files

@@ -59,16 +59,8 @@ pub async fn run(
             bail!("未找到 Codex.app，请先安装 Codex Desktop");
         }
         let result = match action {
-            "uninstall" => {
-                crate::codex_desktop::set_macos_locale(None).await?;
-                crate::codex_desktop::clear_locale_zh_cn()?;
-                Ok("已恢复 Codex 英文界面。".into())
-            }
-            "install" => {
-                crate::codex_desktop::set_macos_locale(Some("zh-CN")).await?;
-                crate::codex_desktop::set_locale_zh_cn()?;
-                Ok("已启用 Codex 简体中文界面，请点击“启动汉化版”或重启 Codex 后生效。".into())
-            }
+            "uninstall" => crate::codex_desktop::launch_english().await,
+            "install" => crate::codex_desktop::launch_localized().await,
             "launch" => crate::codex_desktop::launch_localized().await,
             _ => unreachable!(),
         };

@@ -315,18 +315,17 @@ pub async fn install(which_cli: &str) -> (bool, String) {
         "claude" if cfg!(target_os = "macos") => {
             sh_with_timeout(
                 r#"set -eu
-prefix="$HOME/.local"
-npm --prefix "$prefix" install -g @anthropic-ai/claude-code \
-  --registry=https://registry.npmmirror.com \
-  --allow-scripts=@anthropic-ai/claude-code
-package_dir="$prefix/lib/node_modules/@anthropic-ai/claude-code"
-if [ -f "$package_dir/install.cjs" ]; then
-  (cd "$package_dir" && node install.cjs)
+installer="$(mktemp)" || exit 1
+trap 'rm -f "$installer"' EXIT
+curl -fLsS --retry 3 --connect-timeout 15 --max-time 120 https://claude.ai/install.sh -o "$installer"
+if ! grep -q 'claude' "$installer"; then
+  printf 'Claude Code 官方安装脚本内容异常。\n'
+  exit 1
 fi
-bin="$prefix/bin/claude"
+/bin/bash "$installer"
+bin="$HOME/.local/bin/claude"
 if [ ! -x "$bin" ]; then
-  printf 'Claude Code 安装包已下载，但 native binary 未生成。\n'
-  printf '请检查网络或重新运行安装。\n'
+  printf '安装器已运行，但未找到 %s。\n' "$bin"
   exit 1
 fi
 "$bin" --version

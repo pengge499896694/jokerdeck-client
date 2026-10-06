@@ -10,6 +10,7 @@ mod config_writer;
 mod diagnostics;
 mod proxy;
 mod secret_store;
+mod startup;
 mod state;
 mod updater;
 
@@ -44,6 +45,16 @@ pub fn run() {
             let _ = std::fs::create_dir_all(&app_dir);
 
             let mut store = load_store(&app_dir)?;
+            #[cfg(not(target_os = "android"))]
+            match config_writer::recover_stale_proxy(store.settings.proxy_port) {
+                Ok(true) => {
+                    if let Err(error) = startup::set_enabled(false) {
+                        tracing::warn!("无法撤销代理恢复登录启动项：{error}");
+                    }
+                }
+                Ok(false) => {}
+                Err(error) => tracing::error!("无法恢复上次运行残留的本地代理配置：{error}"),
+            }
             // All built-in domains serve the same relay; legacy single-domain
             // installs now participate in automatic line selection too.
             store.hosts = DEFAULT_HOSTS.iter().map(|s| s.to_string()).collect();
