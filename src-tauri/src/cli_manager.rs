@@ -318,32 +318,41 @@ pub async fn install(which_cli: &str) -> (bool, String) {
 installer="$(mktemp)" || exit 1
 trap 'rm -f "$installer"' EXIT
 script_ok=0
-for url in \
-  https://claude.ai/install.sh \
-  https://cdn.jsdelivr.net/gh/anthropics/claude-code@latest/install.sh; do
-  : > "$installer"
-  if curl -fLsS --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 \
-      -H 'Accept: text/plain, application/x-sh' "$url" -o "$installer" \
-      && [ -s "$installer" ] \
-      && ! grep -Eiq '<!doctype|<html|<head|/_next/static|anthropicson' "$installer" \
-      && grep -Eiq '(^#!.*(sh|bash)|(^|[[:space:]])(curl|uname|npm|node|claude)([[:space:]]|$))' "$installer"; then
-    script_ok=1
-    break
-  fi
-  printf '安装脚本下载源返回的内容不是可执行脚本：%s\n' "$url"
-done
+if curl -fLsS --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 120 \
+    -H 'Accept: text/plain, application/x-sh' https://claude.ai/install.sh -o "$installer" \
+    && [ -s "$installer" ] \
+    && ! grep -Eiq '<!doctype|<html|<head|/_next/static|anthropicson' "$installer" \
+    && /bin/bash -n "$installer"; then
+  script_ok=1
+else
+  printf '官方安装脚本下载失败或返回了网页，改用 npm 安装。\n'
+fi
 bin="$HOME/.local/bin/claude"
 if [ "$script_ok" -eq 1 ]; then
   /bin/bash "$installer" || script_ok=0
 fi
 if [ "$script_ok" -ne 1 ] || [ ! -x "$bin" ]; then
-  printf '正在回退到 npm 官方包安装（启用 optional native dependencies）...\n'
+  target_cpu=x64
+  if [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null || true)" = "1" ]; then
+    target_cpu=arm64
+  fi
+  printf '正在安装 macOS %s 版本的 Claude Code...\n' "$target_cpu"
   prefix="$HOME/.local"
   npm --prefix "$prefix" install -g @anthropic-ai/claude-code \
     --registry=https://registry.npmjs.org \
-    --include=optional --foreground-scripts --ignore-scripts=false
+    --os=darwin --cpu="$target_cpu" --include=optional \
+    --foreground-scripts --ignore-scripts=false
   package_dir="$prefix/lib/node_modules/@anthropic-ai/claude-code"
-  if [ -f "$package_dir/install.cjs" ]; then
+  native_package="$package_dir/node_modules/@anthropic-ai/claude-code-darwin-$target_cpu"
+  if [ ! -d "$native_package" ]; then
+    printf '缺少 macOS %s 原生包：%s。请检查 npm registry 或 optional dependency 配置。\n' "$target_cpu" "$native_package"
+    exit 1
+  fi
+  if [ ! -f "$package_dir/install.cjs" ]; then
+    printf 'Claude Code 安装包缺少 install.cjs。\n'
+    exit 1
+  fi
+  if ! "$bin" --version >/dev/null 2>&1; then
     (cd "$package_dir" && /usr/bin/env node install.cjs)
   fi
 fi

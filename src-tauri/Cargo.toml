@@ -1,6 +1,6 @@
 [package]
 name = "jokerdeck-desktop"
-version = "0.1.21"
+version = "0.1.22"
 description = "jokerdeck client for the sub2api relay"
 authors = ["jokerdeck"]
 edition = "2021"
@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "devtools", "unstable"] }
 tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

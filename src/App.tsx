@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
-  ArrowRight, Check, ChevronRight, CircleHelp, Download, Eye, EyeOff,
+  ArrowRight, Check, ChevronRight, CircleHelp, Copy, Download, Eye, EyeOff,
   KeyRound, LayoutDashboard, LogOut, Maximize2, Minimize2, Minus, Monitor, RefreshCw, CreditCard,
   ChartNoAxesCombined, Store, Languages, History, Search, Sparkles, Trash2,
   Settings2, ShieldCheck, Stethoscope, UserRound, Wallet, X, Power, RotateCcw, Bell, Users, Folder, Globe, Receipt, SlidersHorizontal,
@@ -1045,6 +1046,14 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
     } catch (err) { setLog(message(err)); }
     finally { setBusy(""); }
   };
+  const copyInstallLog = async () => {
+    try {
+      await writeText(log);
+      flash("安装日志已复制");
+    } catch (error) {
+      flash(`复制日志失败：${message(error)}`);
+    }
+  };
   const downloadCodexDesktop = async () => {
     setBusy("desktop-download");
     setLog("正在准备 Codex Desktop 安装...");
@@ -1109,7 +1118,9 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
         {item?.installed ? <span className="tag success">已安装</span> : which ? <button className="btn small" disabled={!!busy || boot?.desktop_supported === false}
           onClick={() => which === "desktop" ? void downloadCodexDesktop() : install(which)}>
           <Download size={14} />{which === "desktop" ? (busy === "desktop-download" ? "安装中..." : "下载并安装") : busy === which ? "安装中..." : "安装"}</button> : <span className="tag warning">缺失</span>}</div>)}
-      {log && <pre className="log">{log}</pre>}
+      {log && <div className="install-log"><button type="button" className="icon-button" title="复制安装日志"
+        aria-label="复制安装日志" onClick={() => void copyInstallLog()}><Copy size={16} /></button>
+        <pre className="log">{log}</pre></div>}
       {navigator.platform.toLowerCase().includes("mac") && report?.chatgpt_desktop.installed && !report?.codex_desktop.installed &&
         <small className="subtext">已检测到 {report.chatgpt_desktop.path}，但不是支持 Codex 的新版 ChatGPT Desktop（旧版 Classic 不支持此处汉化）。请安装新版后重新检测。</small>}
       {navigator.platform.toLowerCase().includes("mac") && !report?.codex_desktop.installed &&
