@@ -22,8 +22,19 @@ use state::{load_store, save_store, AppState, DEFAULT_HOSTS, SITE_HOST};
 
 fn restore_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
         let _ = window.unminimize();
+        let _ = window.show();
+        #[cfg(target_os = "macos")]
+        {
+            // A hidden macOS app can keep its window visible but inactive.
+            // Activate the bundle before focusing the webview.
+            let _ = std::process::Command::new("/usr/bin/osascript")
+                .args([
+                    "-e",
+                    r#"tell application id "cc.jokerdeck.client" to activate"#,
+                ])
+                .output();
+        }
         let _ = window.set_focus();
     }
 }
@@ -115,6 +126,9 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&show, &quit])?;
             let mut tray = TrayIconBuilder::new()
                 .menu(&menu)
+                // macOS otherwise consumes the left click to open the menu and
+                // never reaches the restore handler below.
+                .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {
                         restore_main_window(app);
