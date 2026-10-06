@@ -46,10 +46,17 @@ button { color: inherit; }
 .setup-progress-heading { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; font-size: 12px; overflow-wrap: anywhere; }
 .setup-progress-heading strong { min-width: 0; font-weight: 500; }
 .setup-progress-heading span { flex-shrink: 0; color: var(--muted); }
-.guide-dialog { width: min(500px, 100%); }
 .guide-kicker { color: var(--brand); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
-.guide-dialog h2 { margin-top: 8px; font-size: 18px; }
-.guide-dialog p { margin: 12px 0 0; }
+.guide-intro { width: min(500px, 100%); }
+.guide-intro h2 { margin-top: 8px; font-size: 18px; }
+.guide-intro p { margin: 12px 0 0; }
+.guide-intro-actions { justify-content: flex-end; margin-top: 20px; }
+.guide-layer { position: fixed; inset: 0; z-index: 200; pointer-events: none; }
+.guide-spotlight { position: fixed; border: 2px solid var(--brand); border-radius: 8px; background: transparent; box-shadow: 0 0 0 9999px rgb(15 23 42 / 52%), 0 0 0 5px rgb(13 148 136 / 18%); transition: top .2s ease, left .2s ease, width .2s ease, height .2s ease; }
+.guide-tooltip { position: fixed; width: min(320px, calc(100vw - 32px)); padding: 16px; background: white; border: 1px solid #99f6e4; border-radius: 8px; box-shadow: 0 14px 36px rgb(15 23 42 / 22%); pointer-events: auto; }
+.guide-tooltip h2 { margin: 7px 0 0; font-size: 16px; }
+.guide-tooltip p { margin: 8px 0 0; line-height: 1.6; color: #4b5563; overflow-wrap: anywhere; }
+.guide-tooltip .row { justify-content: flex-end; margin-top: 14px; }
 .guide-dots { display: flex; gap: 7px; margin-top: 18px; }
 .guide-dots span { width: 7px; height: 7px; border-radius: 50%; background: #d1d5db; }
 .guide-dots span.active { background: var(--brand); }

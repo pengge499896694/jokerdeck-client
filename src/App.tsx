@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -261,7 +261,7 @@ export default function App() {
         <aside className="sidebar">
           <div className="sidebar-brand"><img src={logo} alt="" /><div><strong>jokerdeck</strong><small>中转服务</small></div></div>
           <span className="nav-label">工作空间</span>
-          <nav>{tabs.map(({ id, title, icon: Icon }) => <button key={id}
+          <nav>{tabs.map(({ id, title, icon: Icon }) => <button key={id} id={id === "tools" ? "tools-nav" : undefined}
             className={`nav-link ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
             <Icon size={18} /><span>{title}</span>{tab === id && <ChevronRight size={15} />}</button>)}</nav>
           <span className="nav-label site-nav-label">中转站</span>
@@ -624,9 +624,8 @@ function Setup({ user, setUser, boot, refreshBoot, flash, goTools }: {
   const [configView, setConfigView] = useState<(ToolConfigView & { which: string }) | null>(null);
   const [viewBusy, setViewBusy] = useState(false);
   const [setupProgress, setSetupProgress] = useState<{ percent: number; detail: string } | null>(null);
-  const [guideOpen, setGuideOpen] = useState(() => {
-    try { return localStorage.getItem("jokerdeck.beginner-guide.v1") !== "1"; } catch { return false; }
-  });
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [guideIntro, setGuideIntro] = useState(false);
   const [guideStep, setGuideStep] = useState(0);
   const modelRevision = useRef(0);
   const group = groups.find((item) => item.id === groupId);
@@ -769,12 +768,9 @@ function Setup({ user, setUser, boot, refreshBoot, flash, goTools }: {
   const applied = result?.active_group_id === groupId || (status?.active_group?.group_id === groupId && !!status?.running);
   const finishGuide = () => {
     try { localStorage.setItem("jokerdeck.beginner-guide.v1", "1"); } catch {}
-    setGuideOpen(false);
+    setGuideOpen(false); setGuideIntro(false);
   };
-  const guideTarget = (id: string) => {
-    finishGuide();
-    window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
-  };
+  const openGuide = () => { setGuideStep(0); setGuideIntro(true); };
   return <>
     <div className="stats">
       <div className="stat"><span><Wallet size={17} />账户余额<button className="icon-button" title="刷新余额" aria-label="刷新余额" onClick={refreshAccount}><RefreshCw size={14} /></button></span>
@@ -786,7 +782,7 @@ function Setup({ user, setUser, boot, refreshBoot, flash, goTools }: {
     </div>
     <section className="section">
       <div className="section-header"><h2>分组与模型</h2><div className="row">
-        <button className="btn small" onClick={() => { setGuideStep(0); setGuideOpen(true); }}><CircleHelp size={15} />新手引导</button>
+        <button className="btn small" onClick={openGuide}><CircleHelp size={15} />新手引导</button>
         <button className="icon-button" title="拉取当前分组模型" aria-label="拉取当前分组模型"
           disabled={!groupId || modelsBusy || busy} onClick={() => groupId && loadModels(groupId)}>
           <RefreshCw size={17} className={modelsBusy ? "spin" : ""} /></button>
@@ -806,7 +802,7 @@ function Setup({ user, setUser, boot, refreshBoot, flash, goTools }: {
       {!loading && !groups.length && !error && <div className="alert warning">没有可配置分组，请在中转站检查授权或订阅。</div>}
       {modelsError && <div className="alert error" role="alert">{modelsError}</div>}
       {groupModels?.codex_error && <div className="alert warning">{groupModels.codex_error}</div>}
-      <div className="model-grid">
+      <div className="model-grid" id="model-options">
         <div className="field"><label htmlFor="claude-model">Claude Code</label><div className="model-action">
           <select id="claude-model" className="input" disabled={busy || modelsBusy || !claudeModels.length} value={selectedClaudeModel}
             onChange={(event) => { setClaudeModel(event.target.value); setResult(null); setProbes((old) => ({ ...old, claude: undefined })); }}>
@@ -879,7 +875,9 @@ function Setup({ user, setUser, boot, refreshBoot, flash, goTools }: {
         <span className="break">{host.host}</span>{status.active_host === host.host && <span className="tag success">当前</span>}
         {status.preferred_host === host.host && <span className="tag">优先</span>}</span>
         <small>{host.latency_ms != null ? `${host.latency_ms} ms` : "未检测"}</small></div>)}</section>
-    {guideOpen && <BeginnerGuide step={guideStep} setStep={setGuideStep} onTarget={guideTarget}
+    {guideIntro && <GuideIntro onStart={() => { setGuideIntro(false); setGuideOpen(true); }}
+      onSkip={finishGuide} />}
+    {guideOpen && <BeginnerGuide step={guideStep} setStep={setGuideStep}
       onTools={() => { finishGuide(); goTools(); }} onClose={finishGuide} />}
   </>;
 }
@@ -1029,28 +1027,65 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
   </>;
 }
 
-function BeginnerGuide({ step, setStep, onTarget, onTools, onClose }: {
-  step: number; setStep: (step: number) => void; onTarget: (id: string) => void;
-  onTools: () => void; onClose: () => void;
-}) {
-  const steps = [
-    { title: "选择分组和模型", text: "先选择已开通的分组，客户端会自动拉取 Claude Code 和 Codex 可用模型。", action: "去选择", target: "group" },
-    { title: "选择 Agent", text: "勾选你要使用的 Claude Code 或 Codex Agent，也可以先测试模型连通性。", action: "去选择 Agent", target: "agent-options" },
-    { title: "一键应用配置", text: "点击一键应用，客户端会创建或复用分组 Key，启动本地代理并写入工具配置。", action: "去一键配置", target: "apply-config" },
-    { title: "安装和汉化环境", text: "到“工具与修复”安装 Node.js、Claude Code、Codex CLI，并可一键汉化 Codex Desktop。", action: "打开工具与修复", target: "" },
-  ];
-  const current = steps[step];
-  return <div className="dialog-backdrop"><div className="dialog guide-dialog" role="dialog" aria-modal="true"
-    aria-labelledby="beginner-guide-title">
-    <div className="guide-kicker">新手引导 · {step + 1}/{steps.length}</div><h2 id="beginner-guide-title">{current.title}</h2>
-    <p>{current.text}</p><div className="guide-dots">{steps.map((_, index) => <span key={index} className={index === step ? "active" : ""} />)}</div>
-    <div className="row wrap">
-      <button className="btn" onClick={onClose}>跳过</button>
-      {step > 0 && <button className="btn" onClick={() => setStep(step - 1)}>上一步</button>}
-      <button className="btn primary" onClick={() => current.target ? onTarget(current.target) : onTools()}>
-        {current.action}<ArrowRight size={16} /></button>
+function GuideIntro({ onStart, onSkip }: { onStart: () => void; onSkip: () => void }) {
+  return <div className="dialog-backdrop"><div className="dialog guide-intro" role="dialog" aria-modal="true"
+    aria-labelledby="guide-intro-title">
+    <div className="guide-kicker">快速上手</div><h2 id="guide-intro-title">需要新手引导吗？</h2>
+    <p>新手引导会用高亮框一步步指向分组、模型、Agent 和一键配置按钮。熟悉客户端可以直接跳过。</p>
+    <div className="row wrap guide-intro-actions">
+      <button className="btn" onClick={onSkip}>我是老手，直接跳过</button>
+      <button className="btn primary" onClick={onStart}>开始新手引导<ArrowRight size={16} /></button>
     </div>
   </div></div>;
+}
+
+function BeginnerGuide({ step, setStep, onTools, onClose }: {
+  step: number; setStep: (step: number) => void; onTools: () => void; onClose: () => void;
+}) {
+  const steps = [
+    { title: "选择分组", text: "先选择已开通的分组，客户端会自动拉取该分组的模型。", target: "group" },
+    { title: "选择模型", text: "确认 Claude Code 或 Codex 使用的模型，也可以点击旁边的测试按钮检查连通性。", target: "model-options" },
+    { title: "选择 Agent", text: "勾选要配置的 Claude Code 或 Codex Agent。", target: "agent-options" },
+    { title: "一键应用配置", text: "点击这里创建或复用分组 Key、启动本地代理并写入工具配置。", target: "apply-config" },
+    { title: "安装和汉化环境", text: "最后到“工具与修复”安装环境、Claude Code、Codex CLI，或一键汉化 Codex Desktop。", target: "tools-nav" },
+  ];
+  const current = steps[step];
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  useLayoutEffect(() => {
+    const target = document.getElementById(current.target);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    const update = () => setRect(target.getBoundingClientRect());
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => { window.removeEventListener("resize", update); window.removeEventListener("scroll", update, true); };
+  }, [current.target]);
+  const next = () => {
+    if (step === steps.length - 1) onTools();
+    else setStep(step + 1);
+  };
+  const tooltipStyle = rect ? {
+    left: `${Math.min(Math.max(rect.left, 16), window.innerWidth - 336)}px`,
+    top: `${rect.bottom + 14 < window.innerHeight - 170 ? rect.bottom + 14 : Math.max(16, rect.top - 164)}px`,
+  } : undefined;
+  return <div className="guide-layer" aria-live="polite">
+    {rect && <div className="guide-spotlight" style={{
+      left: `${rect.left - 6}px`, top: `${rect.top - 6}px`,
+      width: `${rect.width + 12}px`, height: `${rect.height + 12}px`,
+    }} />}
+    <div className="guide-tooltip" style={tooltipStyle} role="dialog" aria-modal="false"
+      aria-labelledby="beginner-guide-title">
+      <div className="guide-kicker">新手引导 · {step + 1}/{steps.length}</div>
+      <h2 id="beginner-guide-title">{current.title}</h2><p>{current.text}</p>
+      <div className="guide-dots">{steps.map((_, index) => <span key={index} className={index === step ? "active" : ""} />)}</div>
+      <div className="row wrap">
+        <button className="btn small" onClick={onClose}>跳过</button>
+        {step > 0 && <button className="btn small" onClick={() => setStep(step - 1)}>上一步</button>}
+        <button className="btn primary small" onClick={next}>{step === steps.length - 1 ? "打开工具与修复" : "下一步"}<ArrowRight size={15} /></button>
+      </div>
+    </div>
+  </div>;
 }
 
 function Tools({ boot, flash, refreshBoot, goSetup }: {
