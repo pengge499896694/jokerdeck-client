@@ -135,17 +135,6 @@ fn macos_bundle_id(app: &Path) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn macos_executable(app: &Path) -> Option<PathBuf> {
-    let output = std::process::Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Print CFBundleExecutable"])
-        .arg(app.join("Contents/Info.plist"))
-        .output()
-        .ok()
-        .filter(|output| output.status.success())?;
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    (!name.is_empty()).then(|| app.join("Contents/MacOS").join(name))
-}
-
 /// macOS: the Codex shell can be packaged as Codex.app or ChatGPT.app.
 /// Only treat ChatGPT.app as Codex when its bundle identifier and Electron
 /// resources identify the unified desktop app, not the native Classic app.
@@ -356,22 +345,21 @@ async fn stop() -> Result<()> {
                 macos_bundle_id(&app).ok_or_else(|| anyhow!("无法读取 Codex bundle ID"))?;
             let script = format!("tell application id \"{bundle_id}\" to quit");
             let _ = run_tool("osascript", &["-e", &script]).await;
-            if let Some(exe) = macos_executable(&app) {
-                for _ in 0..20 {
-                    if !macos_process_running(&exe).await? {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(250)).await;
+            for _ in 0..20 {
+                if !macos_app_running(&app).await? {
+                    break;
                 }
-                if macos_process_running(&exe).await? {
-                    bail!("Codex Desktop 未退出，请手动退出后重试");
-                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            if macos_app_running(&app).await? {
+                bail!("Codex Desktop 未退出，请手动退出后重试");
             }
         }
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn process_has_executable(output: &str, executable: &Path) -> bool {
     let exe = executable.to_string_lossy();
     output.lines().any(|line| {
@@ -388,12 +376,13 @@ fn process_has_executable(output: &str, executable: &Path) -> bool {
     })
 }
 
-async fn macos_process_running(executable: &Path) -> Result<bool> {
-    let (ok, output) = run_tool("ps", &["-axo", "pid=,command="]).await?;
-    if !ok {
-        bail!("无法检查 Codex Desktop 进程：{output}");
-    }
-    Ok(process_has_executable(&output, executable))
+async fn macos_app_running(app: &Path) -> Result<bool> {
+    let Some(bundle_id) = macos_bundle_id(app) else {
+        return Ok(false);
+    };
+    let script = format!("tell application id \"{bundle_id}\" to return running");
+    let (ok, output) = run_tool("osascript", &["-e", &script]).await?;
+    Ok(ok && output.trim().eq_ignore_ascii_case("true"))
 }
 async fn launch_patched_windows(app_dir: &Path) -> Result<(bool, String)> {
     let exe = ["ChatGPT.exe", "Codex.exe", "codex.exe"]
@@ -453,46 +442,30 @@ Start-Process -FilePath $path -WorkingDirectory (Split-Path -Parent $path)"#;
 }
 
 async fn launch_macos(app_bundle: &Path, localized: bool) -> Result<(bool, String)> {
-    let executable = macos_executable(app_bundle)
-        .filter(|path| path.is_file())
-        .ok_or_else(|| anyhow!("Codex Desktop 缺少可执行文件"))?;
-    let mut command = tokio::process::Command::new(&executable);
-    command
-        .current_dir(app_bundle.join("Contents/Resources"))
-        .env(
-            "LANG",
-            if localized {
-                "zh_CN.UTF-8"
-            } else {
-                "en_US.UTF-8"
-            },
-        )
-        .env(
-            "LC_ALL",
-            if localized {
-                "zh_CN.UTF-8"
-            } else {
-                "en_US.UTF-8"
-            },
-        )
-        .kill_on_drop(true);
-    if localized {
-        command.arg("--lang=zh-CN");
+    if !app_bundle.is_dir() {
+        bail!("Codex Desktop 应用目录不存在");
     }
-    command
-        .spawn()
-        .with_context(|| format!("无法启动 {}", executable.display()))?;
+    let app = app_bundle.to_string_lossy().into_owned();
+    let mut args = vec!["-n", "-a", app.as_str()];
+    if localized {
+        args.extend(["--args", "--lang=zh-CN"]);
+    }
+    let (ok, log) = run_tool("open", &args).await?;
+    if !ok {
+        bail!("无法启动 Codex Desktop：{log}");
+    }
     for _ in 0..20 {
-        if macos_process_running(&executable).await? {
-            if let Some(bundle_id) = macos_bundle_id(app_bundle) {
-                let script = format!("tell application id \"{bundle_id}\" to activate");
-                let _ = run_tool("osascript", &["-e", &script]).await;
-            }
+        if macos_app_running(app_bundle).await? {
+            let Some(bundle_id) = macos_bundle_id(app_bundle) else {
+                return Ok((true, "Codex Desktop 已启动".into()));
+            };
+            let script = format!("tell application id \"{bundle_id}\" to activate");
+            let _ = run_tool("osascript", &["-e", &script]).await;
             return Ok((true, "Codex Desktop 已启动".into()));
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    bail!("macOS 已启动请求，但 Codex Desktop 未运行");
+    bail!("macOS 已接受启动请求，但 Codex Desktop 未进入运行状态");
 }
 
 /// 启动「汉化版」Codex：关闭现有进程 → 校正完整性 → 写入 zh-CN → 启动补丁副本。
