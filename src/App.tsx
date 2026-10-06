@@ -795,8 +795,15 @@ function Setup({ user, setUser, boot, refreshBoot, flash, goTools }: {
       <div className="field"><label htmlFor="group">分组</label><select id="group" className="input" value={groupId ?? ""}
         disabled={busy || loading} onChange={(event) => selectGroup(Number(event.target.value))}>
         <option value="" disabled>{loading ? "加载中..." : "选择分组"}</option>
-        {groups.map((item) => <option key={item.id} value={item.id}>{item.name}
-          {item.is_exclusive ? " · 专属" : ""}{item.multiplier != null ? ` · ${item.multiplier}x` : ""}</option>)}</select></div>
+        <optgroup label="公开分组">
+          {groups.filter((item) => !item.is_exclusive).map((item) => <option key={item.id} value={item.id}>{item.name}
+            {item.multiplier != null ? ` · ${item.multiplier}x` : ""}</option>)}
+        </optgroup>
+        <optgroup label="专属分组">
+          {groups.filter((item) => item.is_exclusive).map((item) => <option key={item.id} value={item.id}>{item.name}
+            {item.multiplier != null ? ` · ${item.multiplier}x` : ""}</option>)}
+        </optgroup>
+        </select></div>
       {group && <div className="selection-summary"><span>{group.name}</span><span className={`tag ${applied ? "success" : "warning"}`}>
         {applied ? "代理当前分组" : "待应用"}</span>{group.description && <small>{group.description}</small>}</div>}
       {!loading && !groups.length && !error && <div className="alert warning">没有可配置分组，请在中转站检查授权或订阅。</div>}

@@ -1,3 +1,9 @@
+v0.1.27
+
+- 新增公开分组与专属分组分开展示。
+- Added separate sections for public and exclusive groups.
+- 优化客户端安装与官网更新链路。
+
 更新内容：
 
 - 修复 macOS ChatGPT/Codex 一键重启和汉化启动误报“已启动请求但未运行”。
