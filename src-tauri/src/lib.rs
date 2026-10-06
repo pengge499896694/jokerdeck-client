@@ -16,6 +16,8 @@ mod updater;
 
 use std::sync::Arc;
 
+#[cfg(target_os = "macos")]
+use tauri::RunEvent;
 use tauri::{Emitter, Manager};
 
 use state::{load_store, save_store, AppState, DEFAULT_HOSTS, SITE_HOST};
@@ -214,6 +216,14 @@ pub fn run() {
             commands::forget_password,
             commands::set_site_url,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Reopen { .. } = event {
+                restore_main_window(app);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

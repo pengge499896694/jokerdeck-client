@@ -64,6 +64,12 @@ async fn pick_host(state: &AppState) -> String {
             .any(|host| host.latency_ms.is_some())
             .then(|| proxy.ordered_reachable_hosts())
     };
+    // The sub relay is the canonical control-plane endpoint and is normally
+    // the fastest route for plaza/model metadata. Do not block the first
+    // request on probing every fallback domain.
+    if let Some(preferred) = preferred.as_ref().filter(|host| hosts.contains(host)) {
+        return preferred.clone();
+    }
     if let Some(host) = preferred.as_ref().and_then(|preferred| {
         cached
             .as_ref()
@@ -535,6 +541,13 @@ pub async fn apply_config(
 ) -> CmdResult<ApplyResult> {
     let state = state.inner().clone();
     let _guard = state.configuration_lock.lock().await;
+    let progress = |percent: u8, detail: &str| {
+        let _ = app.emit(
+            "setup-progress",
+            serde_json::json!({ "percent": percent, "detail": detail }),
+        );
+    };
+    progress(5, "正在连接 sub2api 线路");
     if !configure_claude && !configure_codex {
         return Err("请至少选择一个工具".into());
     }
@@ -548,9 +561,12 @@ pub async fn apply_config(
     // key to, so do NOT narrow it further: filtering by `allowed_groups` used to
     // silently drop public groups the user can legitimately use, leaving the
     // picker offering groups the proxy had no key for.
-    let groups = api::list_available_groups(&state.http, &host, &token)
-        .await
-        .map_err(e)?;
+    let (groups, plaza) = tokio::try_join!(
+        api::list_available_groups(&state.http, &host, &token),
+        api::fetch_plaza(&state.http, &host, &token),
+    )
+    .map_err(e)?;
+    progress(20, "已读取可用分组");
     if groups.is_empty() {
         return Err("没有可用分组，请联系管理员开通".into());
     }
@@ -560,9 +576,7 @@ pub async fn apply_config(
     if !groups.iter().any(|g| g.id == selected_id) {
         return Err("所选分组未开通或已停用，请重新选择".into());
     }
-    let plaza = api::fetch_plaza(&state.http, &host, &token)
-        .await
-        .map_err(e)?;
+    progress(35, "已读取分组模型");
     let selected = plaza
         .iter()
         .find(|g| g.id == selected_id)
@@ -594,6 +608,7 @@ pub async fn apply_config(
     let existing = api::list_keys(&state.http, &host, &token)
         .await
         .map_err(e)?;
+    progress(48, "正在检查分组 Key");
     let stored = state.store.read().await.group_keys.clone();
     let mut new_keys: HashMap<i64, String> = HashMap::new();
     let mut group_keys: Vec<GroupKey> = Vec::new();
@@ -621,6 +636,7 @@ pub async fn apply_config(
                     .key
             }
         };
+        progress(62, "分组 Key 已就绪");
         new_keys.insert(g.id, key.clone());
         group_keys.push(GroupKey {
             group_id: g.id,
@@ -638,6 +654,14 @@ pub async fn apply_config(
     } else {
         None
     };
+    progress(
+        72,
+        if configure_codex {
+            "正在同步 Codex 模型目录"
+        } else {
+            "正在准备配置文件"
+        },
+    );
     let codex_names: Vec<&str> = catalog
         .as_ref()
         .and_then(|c| c["models"].as_array())
@@ -671,6 +695,7 @@ pub async fn apply_config(
         paths.push(config_writer::codex_config_path().map_err(e)?);
         paths.push(config_writer::codex_catalog_path().map_err(e)?);
     }
+    progress(86, "正在写入 Claude Code / Codex 配置");
     let transaction = config_writer::ConfigTransaction::begin(paths).map_err(e)?;
     let need_start = {
         let ps = state.proxy.read().await;
@@ -788,6 +813,7 @@ pub async fn apply_config(
         };
     }
     transaction.commit();
+    progress(100, "一键配置完成");
     let mut warnings = if configure_claude {
         config_writer::claude_config_warnings()
     } else {
@@ -862,15 +888,14 @@ pub struct GroupModels {
 async fn group_models(state: &AppState, group_id: i64) -> CmdResult<GroupModels> {
     let token = require_token(state).await?;
     let host = pick_host(state).await;
-    let groups = api::list_available_groups(&state.http, &host, &token)
-        .await
-        .map_err(e)?;
+    let (groups, plaza) = tokio::try_join!(
+        api::list_available_groups(&state.http, &host, &token),
+        api::fetch_plaza(&state.http, &host, &token),
+    )
+    .map_err(e)?;
     if !groups.iter().any(|g| g.id == group_id) {
         return Err("该分组不可用，请重新选择".into());
     }
-    let plaza = api::fetch_plaza(&state.http, &host, &token)
-        .await
-        .map_err(e)?;
     let group = plaza
         .iter()
         .find(|g| g.id == group_id)

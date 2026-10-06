@@ -42,6 +42,17 @@ button { color: inherit; }
 .localization-progress summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .localization-result { margin: 10px 0 0; overflow-wrap: anywhere; }
 .localization-log { max-height: 220px; margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.setup-progress { margin: -2px 0 18px; max-width: 760px; }
+.setup-progress-heading { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.setup-progress-heading strong { min-width: 0; font-weight: 500; }
+.setup-progress-heading span { flex-shrink: 0; color: var(--muted); }
+.guide-dialog { width: min(500px, 100%); }
+.guide-kicker { color: var(--brand); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+.guide-dialog h2 { margin-top: 8px; font-size: 18px; }
+.guide-dialog p { margin: 12px 0 0; }
+.guide-dots { display: flex; gap: 7px; margin-top: 18px; }
+.guide-dots span { width: 7px; height: 7px; border-radius: 50%; background: #d1d5db; }
+.guide-dots span.active { background: var(--brand); }
 .workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 204px minmax(0,1fr); }
 .sidebar { display: flex; flex-direction: column; background: white; border-right: 1px solid var(--border); padding: 22px 12px 12px; min-width: 0; overflow-y: auto; scrollbar-width: none; }
 .sidebar::-webkit-scrollbar { display: none; }

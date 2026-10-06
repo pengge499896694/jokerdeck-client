@@ -296,7 +296,8 @@ export default function App() {
               <button className="btn" onClick={() => setTab("store")}><Store size={16} />店铺销售</button>
             </div></div>
           {tab === "setup" &&
-            <Setup user={user} setUser={setUser} boot={boot} refreshBoot={refreshBoot} flash={flash} />}
+            <Setup user={user} setUser={setUser} boot={boot} refreshBoot={refreshBoot} flash={flash}
+              goTools={() => setTab("tools")} />}
           {tab === "tools" && <Tools boot={boot} flash={flash} refreshBoot={refreshBoot} goSetup={() => setTab("setup")} />}
           {tab === "sessions" && <Sessions flash={flash} />}
           {tab === "enhance" && <CodexEnhance boot={boot} flash={flash} goTools={() => setTab("tools")}
@@ -596,9 +597,9 @@ function AuthForm({ page, onBack, onLogin, onResetLink, resetLink, setResetLink,
   </main>;
 }
 
-function Setup({ user, setUser, boot, refreshBoot, flash }: {
+function Setup({ user, setUser, boot, refreshBoot, flash, goTools }: {
   user: UserInfo; setUser: (user: UserInfo) => void; boot: Bootstrap | null;
-  refreshBoot: () => Promise<Bootstrap>; flash: (text: string) => void;
+  refreshBoot: () => Promise<Bootstrap>; flash: (text: string) => void; goTools: () => void;
 }) {
   const [groups, setGroups] = useState<PlazaGroup[]>([]);
   const [groupId, setGroupId] = useState<number | undefined>(boot?.preferred_group_id);
@@ -622,6 +623,11 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
   const [probes, setProbes] = useState<Partial<Record<"claude" | "codex", ModelProbe>>>({});
   const [configView, setConfigView] = useState<(ToolConfigView & { which: string }) | null>(null);
   const [viewBusy, setViewBusy] = useState(false);
+  const [setupProgress, setSetupProgress] = useState<{ percent: number; detail: string } | null>(null);
+  const [guideOpen, setGuideOpen] = useState(() => {
+    try { return localStorage.getItem("jokerdeck.beginner-guide.v1") !== "1"; } catch { return false; }
+  });
+  const [guideStep, setGuideStep] = useState(0);
   const modelRevision = useRef(0);
   const group = groups.find((item) => item.id === groupId);
   const claudeModels = groupModels && groupModels.group_id === groupId ? groupModels.claude_models : [];
@@ -653,12 +659,23 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
     }, 5000);
     return () => window.clearInterval(interval);
   }, []);
+  useEffect(() => {
+    if (isPreview) return;
+    let disposed = false;
+    let unsubscribe: (() => void) | undefined;
+    listen<{ percent: number; detail: string }>("setup-progress", ({ payload }) => {
+      if (!disposed) setSetupProgress(payload);
+    }).then((off) => { if (disposed) off(); else unsubscribe = off; }).catch(() => {});
+    return () => { disposed = true; unsubscribe?.(); };
+  }, []);
   const loadModels = async (id: number) => {
     const revision = ++modelRevision.current;
     setGroupModels(null); setModelsBusy(true); setModelsError(""); setProbes({});
+    setSetupProgress({ percent: 12, detail: "正在从 sub2api 拉取模型" });
     try {
       const models = await api.groupModels(id);
       if (revision === modelRevision.current) setGroupModels(models);
+      if (revision === modelRevision.current) setSetupProgress({ percent: 100, detail: "模型列表已加载" });
     } catch (err) {
       if (revision === modelRevision.current) setModelsError(message(err));
     } finally {
@@ -677,6 +694,7 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
   const apply = async () => {
     if (busy) return;
     setBusy(true); setError(""); setResult(null); setRestoreResult(null);
+    setSetupProgress({ percent: 5, detail: "准备一键配置" });
     try {
       const applied = await api.applyConfig(claude && !!claudeModels.length, codex && !!codexModels.length,
         groupId, selectedClaudeModel || undefined, selectedCodexModel || undefined);
@@ -685,6 +703,7 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
       const next = await refreshBoot();
       setClaudeModel(next.claude_model ?? ""); setCodexModel(next.codex_model ?? "");
       flash("分组 Key、线路和模型配置已应用");
+      setSetupProgress({ percent: 100, detail: "一键配置完成" });
     } catch (err) { setError(message(err)); }
     finally { setBusy(false); }
   };
@@ -730,10 +749,12 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
   const testModel = async (tool: "claude" | "codex") => {
     if (!groupId || testing) return;
     const model = tool === "claude" ? selectedClaudeModel : selectedCodexModel;
-    setTesting(tool); setProbes((current) => ({ ...current, [tool]: undefined }));
+    setTesting(tool); setSetupProgress({ percent: 15, detail: `正在测试 ${tool === "claude" ? "Claude Code" : "Codex"} 模型` });
+    setProbes((current) => ({ ...current, [tool]: undefined }));
     try {
       const result = await api.testGroupModel(groupId, tool, model);
       setProbes((current) => ({ ...current, [tool]: result }));
+      setSetupProgress({ percent: 100, detail: "模型测试完成" });
     } catch (err) {
       setProbes((current) => ({ ...current, [tool]: { ok: false, detail: message(err) } }));
     } finally { setTesting(null); }
@@ -746,6 +767,14 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
     finally { setViewBusy(false); }
   };
   const applied = result?.active_group_id === groupId || (status?.active_group?.group_id === groupId && !!status?.running);
+  const finishGuide = () => {
+    try { localStorage.setItem("jokerdeck.beginner-guide.v1", "1"); } catch {}
+    setGuideOpen(false);
+  };
+  const guideTarget = (id: string) => {
+    finishGuide();
+    window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
+  };
   return <>
     <div className="stats">
       <div className="stat"><span><Wallet size={17} />账户余额<button className="icon-button" title="刷新余额" aria-label="刷新余额" onClick={refreshAccount}><RefreshCw size={14} /></button></span>
@@ -757,11 +786,16 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
     </div>
     <section className="section">
       <div className="section-header"><h2>分组与模型</h2><div className="row">
+        <button className="btn small" onClick={() => { setGuideStep(0); setGuideOpen(true); }}><CircleHelp size={15} />新手引导</button>
         <button className="icon-button" title="拉取当前分组模型" aria-label="拉取当前分组模型"
           disabled={!groupId || modelsBusy || busy} onClick={() => groupId && loadModels(groupId)}>
           <RefreshCw size={17} className={modelsBusy ? "spin" : ""} /></button>
         <button className="icon-button" title="刷新分组" aria-label="刷新分组"
           disabled={loading || busy} onClick={load}><RefreshCw size={17} /></button></div></div>
+      {setupProgress && <div className="setup-progress" aria-live="polite">
+        <div className="setup-progress-heading"><strong>{setupProgress.detail}</strong><span>{setupProgress.percent}%</span></div>
+        <div className="progress-track"><span style={{ width: `${setupProgress.percent}%` }} /></div>
+      </div>}
       <div className="field"><label htmlFor="group">分组</label><select id="group" className="input" value={groupId ?? ""}
         disabled={busy || loading} onChange={(event) => selectGroup(Number(event.target.value))}>
         <option value="" disabled>{loading ? "加载中..." : "选择分组"}</option>
@@ -790,7 +824,7 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
             <Stethoscope size={16} />测试（计费）</button></div>
           {probes.codex && <small className={`probe-result ${probes.codex.ok ? "positive" : "probe-fail"}`}>{probes.codex.detail}</small>}</div>
       </div>
-      <div className="tool-options">
+      <div className="tool-options" id="agent-options">
         <label className="tool-choice"><input type="checkbox" checked={claude && !!claudeModels.length}
           disabled={busy || !claudeModels.length} onChange={(event) => setClaude(event.target.checked)} />
           <span><strong>Claude Code</strong><small>{report?.claude.installed ? `已安装 · ${report.claude.version ?? ""}` : "未检测到 CLI"}</small></span></label>
@@ -820,7 +854,7 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
           <RotateCcw size={17} />恢复配置</button>
         <button className="btn" disabled={busy || !status?.running} onClick={stopProxy}>
           <Power size={17} />关闭代理</button>
-        <button className="btn primary" disabled={busy || loading || modelsBusy || !group || boot?.desktop_supported === false
+        <button id="apply-config" className="btn primary" disabled={busy || loading || modelsBusy || !group || boot?.desktop_supported === false
           || !(claude && claudeModels.length || codex && codexModels.length)} onClick={apply}>
           {busy ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}{busy ? "处理中..." : "一键应用配置"}</button></div></div>
     </section>
@@ -845,6 +879,8 @@ function Setup({ user, setUser, boot, refreshBoot, flash }: {
         <span className="break">{host.host}</span>{status.active_host === host.host && <span className="tag success">当前</span>}
         {status.preferred_host === host.host && <span className="tag">优先</span>}</span>
         <small>{host.latency_ms != null ? `${host.latency_ms} ms` : "未检测"}</small></div>)}</section>
+    {guideOpen && <BeginnerGuide step={guideStep} setStep={setGuideStep} onTarget={guideTarget}
+      onTools={() => { finishGuide(); goTools(); }} onClose={finishGuide} />}
   </>;
 }
 
@@ -991,6 +1027,30 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
       </div>
     </section>
   </>;
+}
+
+function BeginnerGuide({ step, setStep, onTarget, onTools, onClose }: {
+  step: number; setStep: (step: number) => void; onTarget: (id: string) => void;
+  onTools: () => void; onClose: () => void;
+}) {
+  const steps = [
+    { title: "选择分组和模型", text: "先选择已开通的分组，客户端会自动拉取 Claude Code 和 Codex 可用模型。", action: "去选择", target: "group" },
+    { title: "选择 Agent", text: "勾选你要使用的 Claude Code 或 Codex Agent，也可以先测试模型连通性。", action: "去选择 Agent", target: "agent-options" },
+    { title: "一键应用配置", text: "点击一键应用，客户端会创建或复用分组 Key，启动本地代理并写入工具配置。", action: "去一键配置", target: "apply-config" },
+    { title: "安装和汉化环境", text: "到“工具与修复”安装 Node.js、Claude Code、Codex CLI，并可一键汉化 Codex Desktop。", action: "打开工具与修复", target: "" },
+  ];
+  const current = steps[step];
+  return <div className="dialog-backdrop"><div className="dialog guide-dialog" role="dialog" aria-modal="true"
+    aria-labelledby="beginner-guide-title">
+    <div className="guide-kicker">新手引导 · {step + 1}/{steps.length}</div><h2 id="beginner-guide-title">{current.title}</h2>
+    <p>{current.text}</p><div className="guide-dots">{steps.map((_, index) => <span key={index} className={index === step ? "active" : ""} />)}</div>
+    <div className="row wrap">
+      <button className="btn" onClick={onClose}>跳过</button>
+      {step > 0 && <button className="btn" onClick={() => setStep(step - 1)}>上一步</button>}
+      <button className="btn primary" onClick={() => current.target ? onTarget(current.target) : onTools()}>
+        {current.action}<ArrowRight size={16} /></button>
+    </div>
+  </div></div>;
 }
 
 function Tools({ boot, flash, refreshBoot, goSetup }: {

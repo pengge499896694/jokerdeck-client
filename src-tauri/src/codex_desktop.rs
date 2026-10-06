@@ -249,21 +249,37 @@ pub(crate) fn clear_locale_zh_cn() -> Result<()> {
 }
 
 pub(crate) fn locale_is_zh_cn() -> bool {
-    let Ok(path) = crate::config_writer::codex_config_path() else {
-        return false;
-    };
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    text.parse::<toml_edit::DocumentMut>()
+    let config_locale = crate::config_writer::codex_config_path()
         .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
         .and_then(|doc| {
             doc.get("desktop")?
                 .get("localeOverride")?
                 .as_str()
                 .map(str::to_owned)
         })
-        .is_some_and(|locale| locale.eq_ignore_ascii_case("zh-cn"))
+        .is_some_and(|locale| locale.eq_ignore_ascii_case("zh-cn"));
+    if config_locale || !cfg!(target_os = "macos") {
+        return config_locale;
+    }
+
+    // macOS may retain the language in CFPreferences even when the TOML
+    // override was not written by an older client version.
+    let Some(app) = macos_codex_app() else {
+        return false;
+    };
+    let Some(bundle_id) = macos_bundle_id(&app) else {
+        return false;
+    };
+    let languages = std::process::Command::new("defaults")
+        .args(["read", &bundle_id, "AppleLanguages"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).to_ascii_lowercase())
+        .unwrap_or_default();
+    languages.contains("zh-hans") || languages.contains("zh-cn")
 }
 /// 运行一段 PowerShell（Windows 启动/关闭用），不弹出控制台窗口。
 async fn powershell(
@@ -440,22 +456,43 @@ async fn launch_macos(app_bundle: &Path, localized: bool) -> Result<(bool, Strin
     let executable = macos_executable(app_bundle)
         .filter(|path| path.is_file())
         .ok_or_else(|| anyhow!("Codex Desktop 缺少可执行文件"))?;
-    let app = app_bundle.to_string_lossy().into_owned();
-    let (ok, log) = if localized {
-        run_tool("open", &["-n", "-a", &app, "--args", "--lang=zh-CN"]).await?
-    } else {
-        run_tool("open", &["-n", "-a", &app]).await?
-    };
-    if ok {
-        for _ in 0..20 {
-            if macos_process_running(&executable).await? {
-                return Ok((true, "Codex Desktop 已启动".into()));
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-        bail!("macOS 已接受启动请求，但 Codex Desktop 未运行");
+    let mut command = tokio::process::Command::new(&executable);
+    command
+        .current_dir(app_bundle.join("Contents/Resources"))
+        .env(
+            "LANG",
+            if localized {
+                "zh_CN.UTF-8"
+            } else {
+                "en_US.UTF-8"
+            },
+        )
+        .env(
+            "LC_ALL",
+            if localized {
+                "zh_CN.UTF-8"
+            } else {
+                "en_US.UTF-8"
+            },
+        )
+        .kill_on_drop(true);
+    if localized {
+        command.arg("--lang=zh-CN");
     }
-    Ok((false, log))
+    command
+        .spawn()
+        .with_context(|| format!("无法启动 {}", executable.display()))?;
+    for _ in 0..20 {
+        if macos_process_running(&executable).await? {
+            if let Some(bundle_id) = macos_bundle_id(app_bundle) {
+                let script = format!("tell application id \"{bundle_id}\" to activate");
+                let _ = run_tool("osascript", &["-e", &script]).await;
+            }
+            return Ok((true, "Codex Desktop 已启动".into()));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    bail!("macOS 已启动请求，但 Codex Desktop 未运行");
 }
 
 /// 启动「汉化版」Codex：关闭现有进程 → 校正完整性 → 写入 zh-CN → 启动补丁副本。
