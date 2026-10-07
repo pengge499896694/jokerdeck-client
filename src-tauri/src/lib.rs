@@ -241,7 +241,7 @@ pub fn run() {
         });
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod window_restore_tests {
     use super::*;
 

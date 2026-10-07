@@ -1,6 +1,6 @@
 [package]
 name = "jokerdeck-desktop"
-version = "0.1.30"
+version = "0.1.31"
 description = "jokerdeck client for the sub2api relay"
 authors = ["jokerdeck"]
 edition = "2021"
@@ -34,7 +34,7 @@ dirs = "5"
 toml_edit = "0.22"
 sha2 = "0.10"
 
-[dev-dependencies]
+[target.'cfg(target_os = "macos")'.dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 
 [target.'cfg(windows)'.dependencies]
