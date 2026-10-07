@@ -1,8 +1,9 @@
-v0.1.29
+v0.1.30
 
-- 新增独立「自助渠道监控」入口，与网页版使用相同功能。
-- 用户可用自己的分组 Key 检测所选分组或全部分组，按正常分组用量计费。
-- 管理员可额外检测单个或全部上游渠道，并共享检测结果。
-- 检测前提示费用，查看页面不会自动消耗 token。
+- 修复嵌入网页版后最小化到托盘无法恢复窗口的问题，Windows/macOS 共用修复。
+- 托盘左键和右键「显示窗口」均恢复原生主窗口。
+- 重复启动和 macOS Dock 重新打开也使用同一恢复逻辑。
+- 包含 v0.1.29 的独立自助渠道监控入口，用户检测正常计费，管理员结果共享。
 
-- Added self-service channel monitoring with group Key checks and shared admin results.
+- Fixed native window restoration after opening embedded website views on Windows and macOS.
+- Includes self-service monitoring introduced in v0.1.29.

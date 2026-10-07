@@ -22,11 +22,17 @@ use tauri::{Emitter, Manager};
 
 use state::{load_store, save_store, AppState, DEFAULT_HOSTS, SITE_HOST};
 
-fn restore_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        #[cfg(target_os = "macos")]
+fn restore_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    // Embedded site views make main a multi-webview native window.
+    // get_webview_window only resolves windows containing one webview.
+    if let Some(window) = app.get_window("main") {
+        if let Err(error) = window.show() {
+            tracing::error!("Cannot show main window: {error}");
+        }
+        if let Err(error) = window.unminimize() {
+            tracing::error!("Cannot restore main window: {error}");
+        }
+        #[cfg(all(target_os = "macos", not(test)))]
         {
             // A hidden macOS app can keep its window visible but inactive.
             // Activate the bundle before focusing the webview.
@@ -37,7 +43,11 @@ fn restore_main_window(app: &tauri::AppHandle) {
                 ])
                 .output();
         }
-        let _ = window.set_focus();
+        if let Err(error) = window.set_focus() {
+            tracing::error!("Cannot focus main window: {error}");
+        }
+    } else {
+        tracing::error!("Main native window not found");
     }
 }
 
@@ -48,12 +58,12 @@ pub fn run() {
         .try_init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             restore_main_window(app);
         }))
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let app_dir = app
                 .path()
@@ -145,10 +155,10 @@ pub fn run() {
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    // Right-click is reserved for the native tray menu. Restoring
-                    // the window here closes that menu before it can be used.
+                    // Left click restores the window; right click keeps its menu
+                    // usable and the explicit Show action restores the window.
                     if let TrayIconEvent::Click {
-                        button: MouseButton::Left | MouseButton::Right,
+                        button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
                         ..
                     } = event
@@ -229,4 +239,32 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let _ = (app, event);
         });
+}
+
+#[cfg(test)]
+mod window_restore_tests {
+    use super::*;
+
+    #[test]
+    fn restores_native_main_after_embedded_site_is_added() {
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let main = tauri::WebviewWindowBuilder::new(&app, "main", tauri::WebviewUrl::default())
+            .build()
+            .unwrap();
+        main.as_ref()
+            .window()
+            .add_child(
+                tauri::webview::WebviewBuilder::new("relay-site", tauri::WebviewUrl::default()),
+                tauri::LogicalPosition::new(0., 0.),
+                tauri::LogicalSize::new(640., 480.),
+            )
+            .unwrap();
+        // The legacy lookup fails once the embedded site creates another webview.
+        assert!(app.get_webview_window("main").is_none());
+        let native = app.get_window("main").unwrap();
+        native.hide().unwrap();
+        restore_main_window(app.handle());
+    }
 }
