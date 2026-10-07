@@ -54,22 +54,30 @@ pub async fn run(
         bail!("未知的 Codex 汉化操作");
     }
     if cfg!(target_os = "macos") {
-        progress(report, 10, "检查 Codex Desktop");
+        progress(report, 8, "检测 ChatGPT / Codex 安装位置");
         if crate::codex_desktop::macos_codex_app().is_none() {
-            bail!("未找到 Codex.app，请先安装 Codex Desktop");
+            bail!("未找到支持 Codex 的 ChatGPT / Codex 应用，请先安装新版客户端");
         }
-        let result = match action {
-            "uninstall" => crate::codex_desktop::launch_english().await,
-            "install" => crate::codex_desktop::launch_localized().await,
-            "launch" => crate::codex_desktop::launch_localized().await,
-            _ => unreachable!(),
-        };
-        if result.is_ok() {
-            progress(report, 100, "操作完成");
+        if action == "uninstall" {
+            progress(report, 35, "撤销中文设置并关闭当前应用");
+            let result = crate::codex_desktop::launch_english().await?;
+            progress(report, 100, "英文版本启动完成");
+            return Ok(result);
         }
-        return result;
+        progress(report, 25, "检测原生中文支持（无需下载汉化包）");
+        crate::codex_desktop::launch_localized_with_progress(report).await
+    } else {
+        run_windows(app_dir, http, action, preferred_host, report).await
     }
+}
 
+async fn run_windows(
+    app_dir: &Path,
+    http: &reqwest::Client,
+    action: &str,
+    preferred_host: &str,
+    report: &(dyn Fn(LocalizationProgress) + Send + Sync),
+) -> Result<String> {
     if !cfg!(windows) {
         bail!("当前平台暂不支持 Codex 桌面端汉化");
     }
@@ -83,7 +91,10 @@ pub async fn run(
         if result.is_ok() {
             crate::codex_desktop::clear_locale_zh_cn()?;
             let _ = std::fs::remove_file(root.join(SAFE_PATCH_STAMP));
-            progress(report, 100, "英文界面已恢复");
+            progress(report, 90, "正在启动英文版本");
+            let launched = crate::codex_desktop::launch_english().await?;
+            progress(report, 100, "英文版本启动完成");
+            return Ok(launched);
         }
         return result;
     }

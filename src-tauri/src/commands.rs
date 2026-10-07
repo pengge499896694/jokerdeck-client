@@ -449,6 +449,45 @@ pub async fn show_site(
          header.glass.sticky > div > div:first-child > button.btn-icon { display: none !important; }",
     )
     .map_err(e)?;
+    // Native child webviews cover React overlays; render the transition inside the page too.
+    let loading_script = r#"
+    (() => {
+      const mount = () => {
+        if (!document.body || document.getElementById('jokerdeck-site-loading')) return;
+        const overlay = document.createElement('div');
+        overlay.id = 'jokerdeck-site-loading';
+        overlay.innerHTML = '<div class="jd-spinner"></div><strong>正在打开中转站</strong><small>连接并加载页面...</small>';
+        const style = document.createElement('style');
+        style.textContent = '#jokerdeck-site-loading{position:fixed;inset:0;z-index:2147483647;background:#f5f7fb;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#44516b;font:14px system-ui;transition:opacity .25s}.jd-spinner{width:32px;height:32px;border:3px solid #dce3ef;border-top-color:#6375e9;border-radius:50%;animation:jd-spin .9s linear infinite}@keyframes jd-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.jd-spinner{animation:none}}';
+        document.head.appendChild(style);
+        document.body.appendChild(overlay);
+        let timeout;
+        const finish = () => {
+          const root = document.querySelector('#app, #root');
+          if (root && root.children.length) {
+            observer.disconnect(); clearTimeout(timeout);
+            requestAnimationFrame(() => { overlay.style.opacity = '0'; setTimeout(() => overlay.remove(), 250); });
+          }
+        };
+        const observer = new MutationObserver(finish);
+        observer.observe(document.body, {childList:true,subtree:true});
+        timeout = setTimeout(() => {
+          observer.disconnect();
+          if (document.querySelector('#app, #root')?.children.length) overlay.remove();
+          else {
+            overlay.querySelector('strong').textContent = '页面加载超时';
+            overlay.querySelector('small').textContent = '请检查网络连接';
+            overlay.querySelector('.jd-spinner').remove();
+            const retry = document.createElement('button');
+            retry.textContent = '重新加载'; retry.onclick = () => location.reload(); overlay.appendChild(retry);
+          }
+        }, 20000);
+        finish();
+      };
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, {once:true});
+      else mount();
+    })();
+    "#;
     let script = format!(
         "if (location.origin === {allowed_origin}) {{ \
             localStorage.setItem('auth_token', {token}); \
@@ -469,7 +508,8 @@ pub async fn show_site(
         }}"
     );
     let builder = WebviewBuilder::new("relay-site", WebviewUrl::External(url))
-        .initialization_script(script)
+        .initialization_script(format!("{script}\n{loading_script}"))
+        .background_color(tauri::window::Color(245, 247, 251, 255))
         .on_navigation(|url| url.scheme() == "https");
     window.add_child(builder, position, size).map_err(e)?;
     Ok(())
@@ -825,6 +865,11 @@ pub async fn apply_config(
             "登录启动项设置失败，电脑重启后请打开客户端恢复代理配置：{error}"
         ));
     }
+    if configure_codex && state.store.read().await.settings.provider_auto_sync {
+        if let Err(error) = crate::desktop_features::provider_action(&state, "sync", None).await {
+            warnings.push(format!("配置已应用，但历史 Provider 同步失败：{error}"));
+        }
+    }
     Ok(ApplyResult {
         proxy_port: cfg.port,
         base_url: base,
@@ -1028,35 +1073,15 @@ async fn probe_group_model(
             .json(&serde_json::json!({"model":model,"max_tokens":16,"messages":[{"role":"user","content":"ping"}]})),
         _ => state.http.post(format!("{host}/v1/responses"))
             .bearer_auth(&key)
-            .json(&serde_json::json!({"model":model,"input":"ping","max_output_tokens":16,"stream":false})),
+            .json(&serde_json::json!({"model":model,"input":"ping","max_output_tokens":128,"stream":true})),
     };
     let response = request
         .timeout(std::time::Duration::from_secs(35))
         .send()
         .await
         .map_err(e)?;
-    let status = response.status();
-    let body: serde_json::Value = response.json().await.map_err(e)?;
-    let detail = if status.is_success() && body.get("error").is_none() {
-        format!(
-            "HTTP {} · 模型可用（本次测试可能产生费用）",
-            status.as_u16()
-        )
-    } else {
-        let reason = body["error"]["message"]
-            .as_str()
-            .or_else(|| body["message"].as_str())
-            .unwrap_or("中转返回错误");
-        format!(
-            "HTTP {} · {}",
-            status.as_u16(),
-            reason.chars().take(160).collect::<String>()
-        )
-    };
-    Ok(ModelProbe {
-        ok: status.is_success() && body.get("error").is_none(),
-        detail,
-    })
+    let (ok, detail) = crate::model_probe::read(response).await?;
+    Ok(ModelProbe { ok, detail })
 }
 
 #[derive(Serialize)]
@@ -1365,10 +1390,16 @@ pub async fn codex_localization(
             .unwrap_or_else(|| crate::state::SITE_HOST.to_string())
     };
     let _guard = state.configuration_lock.lock().await;
-    let report = |value| {
+    let completed = std::sync::atomic::AtomicU8::new(0);
+    let report = |mut value: crate::codex_localization::LocalizationProgress| {
+        // Installer substeps can report 100 before the actual desktop launch.
+        let percent = value.percent.min(99);
+        value.percent = completed
+            .fetch_max(percent, std::sync::atomic::Ordering::Relaxed)
+            .max(percent);
         let _ = app.emit("codex-localization-progress", value);
     };
-    crate::codex_localization::run(
+    let result = crate::codex_localization::run(
         &state.app_dir,
         &state.http,
         &action,
@@ -1376,7 +1407,15 @@ pub async fn codex_localization(
         &report,
     )
     .await
-    .map_err(e)
+    .map_err(e)?;
+    let _ = app.emit(
+        "codex-localization-progress",
+        crate::codex_localization::LocalizationProgress {
+            percent: 100,
+            detail: "桌面应用启动完成".into(),
+        },
+    );
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1743,4 +1782,36 @@ mod tests {
         server.abort();
         let _ = server.await;
     }
+}
+
+#[tauri::command]
+pub async fn desktop_feature_status(
+    state: State<'_, SharedState>,
+) -> CmdResult<crate::desktop_features::FeatureStatus> {
+    crate::desktop_features::status(state.inner())
+        .await
+        .map_err(e)
+}
+#[tauri::command]
+pub async fn configure_desktop_features(
+    state: State<'_, SharedState>,
+    theme: String,
+    overlay: bool,
+    auto_sync: bool,
+) -> CmdResult<crate::desktop_features::FeatureStatus> {
+    let _guard = state.configuration_lock.lock().await;
+    crate::desktop_features::configure(state.inner(), theme, overlay, auto_sync)
+        .await
+        .map_err(e)
+}
+#[tauri::command]
+pub async fn provider_sync_action(
+    state: State<'_, SharedState>,
+    action: String,
+    backup: Option<String>,
+) -> CmdResult<serde_json::Value> {
+    let _guard = state.configuration_lock.lock().await;
+    crate::desktop_features::provider_action(state.inner(), &action, backup)
+        .await
+        .map_err(e)
 }

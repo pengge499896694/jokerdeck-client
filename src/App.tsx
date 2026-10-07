@@ -5,13 +5,13 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   ArrowRight, Check, ChevronRight, CircleHelp, Copy, Download, Eye, EyeOff,
   KeyRound, LayoutDashboard, LogOut, Maximize2, Minimize2, Minus, Monitor, RefreshCw, CreditCard,
-  ChartNoAxesCombined, Store, Languages, History, Search, Sparkles, Trash2,
+  ChartNoAxesCombined, Store, History, Search, Sparkles, Trash2,
   Settings2, ShieldCheck, Stethoscope, UserRound, Wallet, X, Power, RotateCcw, Bell, Users, Folder, Globe, Receipt, SlidersHorizontal,
 } from "lucide-react";
 import { api, isPreview, type Bootstrap, type UserInfo, type ProxyStatus, type HostHealth, type CliReport,
   type DiagReport, type PlazaGroup, type ApplyResult, type PublicAuthSettings,
   type GroupModels, type ModelProbe, type ToolConfigView, type UpdateInfo,
-  type CodexSession, type CodexSessionDetail, type CodexEnhancementStatus, type UpdateProgress } from "./api";
+  type CodexSession, type CodexSessionDetail, type DesktopFeatureStatus, type ProviderSyncResult, type CodexEnhancementStatus, type UpdateProgress } from "./api";
 
 type SiteTab = typeof allSiteTabs[number]["id"];
 type Tab = "setup" | "tools" | "sessions" | "enhance" | "account" | SiteTab;
@@ -106,6 +106,9 @@ export default function App() {
   const [updateInstalling, setUpdateInstalling] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress>({ downloaded: 0 });
   const [restarting, setRestarting] = useState(false);
+  const [localeProgress, setLocaleProgress] = useState<{ percent: number; detail: string } | null>(null);
+  const [restoreLocaleConfirm, setRestoreLocaleConfirm] = useState(false);
+  const desktopName = navigator.platform.toLowerCase().includes("mac") ? "ChatGPT" : "Codex";
   const siteArea = useRef<HTMLDivElement>(null);
   const timer = useRef<number>();
   const flash = (text: string) => {
@@ -139,14 +142,23 @@ export default function App() {
     } catch (err) { flash(message(err)); }
     finally { setUpdateInstalling(false); }
   };
-  const restartCodex = async () => {
+  const restartCodex = async (action: "launch" | "uninstall" = "launch") => {
     if (restarting) return;
+    setRestoreLocaleConfirm(false);
     setRestarting(true);
+    setLocaleProgress({ percent: 0, detail: action === "launch" ? "正在检测中文支持" : "正在恢复英文版本" });
+    let off: (() => void) | undefined;
     try {
-      const result = await api.restartCodex();
-      flash(result.ok ? "Codex Desktop 已重启" : result.log || "Codex Desktop 重启失败");
-    } catch (err) { flash(message(err)); }
-    finally { setRestarting(false); }
+      // Register before invoking so fast native stages are not lost.
+      off = await listen<{ percent: number; detail: string }>("codex-localization-progress", ({ payload }) => setLocaleProgress(payload));
+      const result = await api.codexLocalization(action);
+      setLocaleProgress({ percent: 100, detail: action === "launch" ? `${desktopName} 启动完成` : "英文版本已恢复" });
+      flash(result);
+      await refreshBoot();
+    } catch (err) {
+      setLocaleProgress((current) => ({ percent: current?.percent ?? 0, detail: `操作失败：${message(err)}` }));
+      flash(message(err));
+    } finally { off?.(); setRestarting(false); }
   };
   const refreshBoot = async () => {
     const result = await api.bootstrap();
@@ -287,15 +299,22 @@ export default function App() {
           </div>
         </aside>
         <main className={`main ${siteTab ? "site-main" : ""}`}>
-          {siteTab ? <div ref={siteArea} className="site-area" /> : <>
+          {siteTab ? <div ref={siteArea} className="site-area"><div className="site-loading"><RefreshCw size={28} className="spin" /><strong>正在打开中转站</strong><small>连接并加载页面...</small></div></div> : <>
           <div className="page-header"><div><span className="breadcrumb">工作空间 / {tabs.find((item) => item.id === tab)?.title}</span>
             <h1>{tabs.find((item) => item.id === tab)?.title}</h1></div>
             <div className="row wrap">
               {tab === "setup" && <button className="btn" disabled={restarting || boot?.desktop_supported === false}
-                onClick={restartCodex}><RefreshCw size={16} className={restarting ? "spin" : ""} />
-                {restarting ? "重启中..." : boot?.codex_localization_active ? "一键重启汉化 Codex" : "一键重启 Codex"}</button>}
+                onClick={() => void restartCodex()}><RefreshCw size={16} className={restarting ? "spin" : ""} />
+                {restarting ? "处理中..." : `一键重启汉化 ${desktopName}`}</button>}
+              {tab === "setup" && <button className="btn" disabled={restarting || boot?.desktop_supported === false}
+                onClick={() => setRestoreLocaleConfirm(true)}><RotateCcw size={16} />恢复英文版本</button>}
               <button className="btn" onClick={() => setTab("store")}><Store size={16} />店铺销售</button>
             </div></div>
+          {tab === "setup" && localeProgress && <div className="section localization-progress" aria-live="polite">
+            <div className="localization-progress-heading"><strong>{localeProgress.detail}</strong><span>{localeProgress.percent}%</span></div>
+            <div className="progress-track" role="progressbar" aria-valuenow={localeProgress.percent} aria-valuemin={0} aria-valuemax={100}>
+              <span style={{ width: `${localeProgress.percent}%` }} /></div>
+          </div>}
           {tab === "setup" &&
             <Setup user={user} setUser={setUser} boot={boot} refreshBoot={refreshBoot} flash={flash}
               goTools={() => setTab("tools")} />}
@@ -308,6 +327,11 @@ export default function App() {
         </main>
       </div>}
     {toast && <div className="toast" role="status">{toast}</div>}
+    {restoreLocaleConfirm && <div className="dialog-backdrop"><div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="restore-locale-title">
+      <h2 id="restore-locale-title">恢复英文版本</h2><p>将关闭当前 {desktopName} 并恢复英文界面，是否继续？</p>
+      <div className="row"><button className="btn" onClick={() => setRestoreLocaleConfirm(false)}>取消</button>
+        <button className="btn primary" onClick={() => void restartCodex("uninstall")}>确认恢复</button></div>
+    </div></div>}
     {closePrompt && <div className="dialog-backdrop"><div className="dialog" role="alertdialog" aria-modal="true"
       aria-labelledby="close-title"><h2 id="close-title">代理仍在运行</h2>
       <p>请先关闭代理并恢复配置。确认后将自动恢复 Claude Code / Codex 配置、停止代理，再关闭客户端。</p>
@@ -784,11 +808,11 @@ function Setup({ user, setUser, boot, refreshBoot, flash, goTools }: {
     <section className="section">
       <div className="section-header"><h2>分组与模型</h2><div className="row">
         <button className="btn small" onClick={openGuide}><CircleHelp size={15} />新手引导</button>
-        <button className="icon-button" title="拉取当前分组模型" aria-label="拉取当前分组模型"
+        <button className="btn small" title="拉取当前分组模型" aria-label="拉取当前分组模型"
           disabled={!groupId || modelsBusy || busy} onClick={() => groupId && loadModels(groupId)}>
-          <RefreshCw size={17} className={modelsBusy ? "spin" : ""} /></button>
-        <button className="icon-button" title="刷新分组" aria-label="刷新分组"
-          disabled={loading || busy} onClick={load}><RefreshCw size={17} /></button></div></div>
+          <RefreshCw size={17} className={modelsBusy ? "spin" : ""} />刷新模型</button>
+        <button className="btn small" title="刷新分组" aria-label="刷新分组"
+          disabled={loading || busy} onClick={load}><RefreshCw size={17} />刷新分组</button></div></div>
       {setupProgress && <div className="setup-progress" aria-live="polite">
         <div className="setup-progress-heading"><strong>{setupProgress.detail}</strong><span>{setupProgress.percent}%</span></div>
         <div className="progress-track"><span style={{ width: `${setupProgress.percent}%` }} /></div>
@@ -978,6 +1002,36 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
 }) {
   const [busy, setBusy] = useState("");
   const [status, setStatus] = useState<CodexEnhancementStatus | null>(null);
+  const [features, setFeatures] = useState<DesktopFeatureStatus | null>(null);
+  const [sync, setSync] = useState<ProviderSyncResult | null>(null);
+  const [featureError, setFeatureError] = useState("");
+  const [syncLog, setSyncLog] = useState("");
+  const [confirmation, setConfirmation] = useState<{ action: "sync" | "restore"; backup?: string } | null>(null);
+  const themes = [
+    { id: "native", name: "原生", colors: ["#f5f5f5", "#202020", "#8b8b8b"] },
+    { id: "rose", name: "玫瑰柔光", colors: ["#fff7fb", "#a93f79", "#3d2340"] },
+    { id: "midnight", name: "午夜蓝", colors: ["#131927", "#8faeff", "#eef3ff"] },
+    { id: "jade", name: "翡翠晨光", colors: ["#f3faf7", "#177d59", "#193b30"] },
+  ];
+  const updateFeatures = async (theme: string, overlay: boolean, autoSync: boolean) => {
+    if (busy) return;
+    setBusy("features"); setFeatureError("");
+    try { setFeatures(await api.configureDesktopFeatures(theme, overlay, autoSync)); flash("设置已保存，已安装增强的 Codex 将自动更新"); }
+    catch (err) { setFeatureError(message(err)); }
+    finally { setBusy(""); }
+  };
+  const provider = async (operation: "install" | "status" | "sync" | "restore", backup?: string) => {
+    setConfirmation(null); setBusy(`provider-${operation}`); setFeatureError("");
+    setSyncLog(operation === "install" ? "正在下载并安装 Provider 同步组件..." : operation === "sync" ? "正在备份并同步会话与 SQLite 索引..." : "正在检查 Provider 数据...");
+    try {
+      const result = await api.providerSyncAction(operation, backup);
+      setSyncLog(operation === "sync" ? `同步完成：会话 ${result.sessionFilesUpdated ?? 0} 个，SQLite ${result.sqliteRowsUpdated ?? 0} 行${result.backupDir ? "；已生成备份" : ""}${result.skippedLockedRolloutFiles?.length ? "；有正在使用的会话被跳过，请停止写入后重试" : ""}` : operation === "restore" ? "备份已恢复，当前 Provider 配置保留" : "组件及 Provider 状态检查完成");
+      setSync(operation === "sync" || operation === "restore" ? await api.providerSyncAction("status") : result);
+      setFeatures(await api.desktopFeatureStatus());
+    } catch (err) { setFeatureError(message(err)); setSyncLog("操作未完成，请查看提示；上游备份会保留"); }
+    finally { setBusy(""); }
+  };
+  useEffect(() => { api.desktopFeatureStatus().then(setFeatures).catch((err) => setFeatureError(message(err))); }, []);
   const refresh = async () => {
     try { setStatus(await api.codexEnhancementStatus()); }
     catch (err) { flash(message(err)); }
@@ -990,6 +1044,52 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
     finally { setBusy(""); }
   };
   return <>
+    <section className="section">
+      <div className="section-header"><h2>服务商切换 · 会话保护</h2><span className="tag">{features?.provider ?? "检测中"}</span></div>
+      <p className="subtext">将历史会话和 SQLite 索引对齐到当前 Provider，找回切换后隐藏的会话。修改前自动备份，保留历史模型与聊天内容。</p>
+      <div className="row wrap">
+        {!features?.sync_installed && <button className="btn primary" disabled={!!busy || !features} onClick={() => void provider("install")}><Download size={16} />{busy === "provider-install" ? "安装中..." : "安装同步组件"}</button>}
+        <button className="btn" disabled={!!busy || !features?.sync_installed} onClick={() => void provider("status")}><Search size={16} />检查同步状态</button>
+        <button className="btn primary" disabled={!!busy || !features?.sync_installed} onClick={() => setConfirmation({ action: "sync" })}><RefreshCw size={16} className={busy === "provider-sync" ? "spin" : ""} />同步历史会话</button>
+        <button className="btn" disabled={!!busy} onClick={() => action("node-upgrade", async () => {
+          const result = await api.installCli("node");
+          if (!result.ok) throw new Error(result.log || "Node.js 升级失败");
+          return result.log || "Node.js 已安装，请重新检查同步组件";
+        })}><Download size={16} />安装 / 升级 Node.js</button>
+        <button className="btn" onClick={goTools}><Monitor size={16} />环境检查</button>
+      </div>
+      <label className="feature-toggle"><input type="checkbox" checked={features?.auto_sync ?? false} disabled={!!busy || !features?.sync_installed}
+        onChange={(event) => features && void updateFeatures(features.theme, features.overlay, event.target.checked)} /><span>应用 Codex 配置后自动同步 Provider</span></label>
+      {sync?.rolloutCounts && <div className="provider-counts">{Object.entries(sync.rolloutCounts).map(([name, count]) => <span className="tag" key={name}>{name} · {count}</span>)}</div>}
+      {!!sync?.backups?.length && <div className="provider-backups"><strong>可恢复备份</strong>{sync.backups.slice(0, 3).map((backup, index) => {
+        const path = backup.path ?? backup.backupDir ?? backup.name ?? "";
+        const id = path.split(/[\/]/).filter(Boolean).pop() ?? "";
+        return <div className="list-row" key={id || index}><small className="subtext">{backup.createdAt ?? id}</small><button className="btn small" disabled={!!busy || !id} onClick={() => setConfirmation({ action: "restore", backup: id })}><RotateCcw size={14} />恢复</button></div>;
+      })}</div>}
+      {syncLog && <p className="subtext" aria-live="polite">{syncLog}</p>}
+      <small className="subtext">基于 codex-provider-sync 0.5.0，需要 Node.js 24+。元数据同步不能保证跨账号或 Provider 的加密会话仍可继续。</small>
+    </section>
+    <section className="section"><div className="section-header"><h2>Codex 换肤</h2><span className="tag">Windows / macOS</span></div>
+      <div className="theme-grid">{themes.map((theme) => <button className={`theme-card ${features?.theme === theme.id ? "selected" : ""}`} key={theme.id}
+        disabled={!!busy || !features} onClick={() => features && void updateFeatures(theme.id, features.overlay, features.auto_sync)} aria-pressed={features?.theme === theme.id}>
+        <span className="theme-preview" style={{ background: theme.colors[0] }}><span style={{ background: theme.colors[1] }} /><span style={{ background: theme.colors[2] }} /></span>
+        <strong>{theme.name}</strong>{features?.theme === theme.id && <Check size={15} />}
+      </button>)}</div>
+      <small className="subtext">首次使用请在首页点击「一键重启汉化」安装增强；之后切换主题自动生效，选择「原生」恢复默认外观。</small>
+    </section>
+    <section className="section"><div className="section-header"><h2>Token 与费用</h2><ChartNoAxesCombined size={18} /></div>
+      <label className="feature-toggle"><input type="checkbox" checked={features?.overlay ?? true} disabled={!!busy || !features}
+        onChange={(event) => features && void updateFeatures(features.theme, event.target.checked, features.auto_sync)} /><span>在 Codex 输入框底部显示用量</span></label>
+      <div className="usage-preview"><span><ChartNoAxesCombined size={14} />今日 <strong>12.4K</strong><small>$0.42</small></span><span>本会话 <strong>3.8K</strong><small>≈$0.08</small></span></div>
+      <small className="subtext">上方为样式示例。实际显示今日账户 Token / 扣费、本会话 Token，以及近期账单匹配费用；悬浮查看累计、输入、缓存与输出明细。未匹配的费用显示 —，尚未完整统计时标记 ≈。</small>
+    </section>
+    {featureError && <div className="alert error" role="alert">{featureError}</div>}
+    {confirmation && <div className="dialog-backdrop"><div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="provider-confirm-title">
+      <h2 id="provider-confirm-title">{confirmation.action === "sync" ? "同步历史 Provider" : "恢复历史备份"}</h2>
+      <p>{confirmation.action === "sync" ? "将历史会话与 SQLite 索引同步到当前 Provider，修改前自动备份。建议先停止正在进行的对话。" : "将恢复所选备份中的会话与索引，当前 Provider 配置保持不变。建议先关闭 Codex。"}</p>
+      <div className="row"><button className="btn" onClick={() => setConfirmation(null)}>取消</button><button className="btn primary" onClick={() => void provider(confirmation.action, confirmation.backup)}>确认操作</button></div>
+    </div></div>}
+
     <section className="section"><div className="section-header"><h2>插件市场</h2>
       <span className={`tag ${status?.plugins_enabled ? "success" : "warning"}`}>{status?.plugins_enabled ? "插件功能已启用" : "插件功能未启用"}</span></div>
       <div className="row wrap">
@@ -1017,20 +1117,6 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
     </section>
     <section className="section"><div className="section-header"><h2>会话</h2><History size={18} /></div>
       <button className="btn" onClick={goSessions}><History size={16} />管理本地会话</button>
-    </section>
-    <section className="section"><div className="section-header"><h2>Codex Desktop</h2><Monitor size={18} /></div>
-      <div className="row wrap">
-        <button className="btn" disabled={!!busy || boot?.desktop_supported === false}
-          onClick={() => action("restart", async () => {
-            const result = await api.restartCodex();
-            if (!result.ok) throw new Error(result.log || "重启失败");
-            return boot?.codex_localization_active ? "汉化版 Codex 已重启" : "Codex Desktop 已重启";
-          })}><RefreshCw size={16} className={busy === "restart" ? "spin" : ""} />一键重启</button>
-        <button className="btn" disabled={!!busy || boot?.desktop_supported === false}
-          onClick={() => action("launch", () => api.codexLocalization("launch"))}>
-          <Monitor size={16} />启动汉化版</button>
-        <button className="btn" onClick={goTools}><Languages size={16} />汉化与修复</button>
-      </div>
     </section>
   </>;
 }
@@ -1096,7 +1182,7 @@ function BeginnerGuide({ step, setStep, onTools, onClose }: {
   </div>;
 }
 
-function Tools({ boot, flash, refreshBoot, goSetup }: {
+function Tools({ boot, flash, goSetup }: {
   boot: Bootstrap | null;
   flash: (text: string) => void;
   refreshBoot: () => Promise<Bootstrap>;
@@ -1106,23 +1192,8 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
   const [diag, setDiag] = useState<DiagReport | null>(null);
   const [busy, setBusy] = useState("");
   const [log, setLog] = useState("");
-  const [localeProgress, setLocaleProgress] = useState<{ percent: number; detail: string } | null>(null);
-  const [localeDetails, setLocaleDetails] = useState<string[]>([]);
-  const [localeResult, setLocaleResult] = useState("");
   const [downloadProgress, setDownloadProgress] = useState<{ percent: number; detail: string } | null>(null);
   const [downloadDetails, setDownloadDetails] = useState<string[]>([]);
-  const [restoreConfirm, setRestoreConfirm] = useState(false);
-  useEffect(() => {
-    if (isPreview) return;
-    let disposed = false;
-    let unsubscribe: (() => void) | undefined;
-    listen<{ percent: number; detail: string }>("codex-localization-progress", ({ payload }) => {
-      if (disposed) return;
-      setLocaleProgress(payload);
-      setLocaleDetails((lines) => [...lines.slice(-79), payload.detail]);
-    }).then((off) => { if (disposed) off(); else unsubscribe = off; }).catch(() => {});
-    return () => { disposed = true; unsubscribe?.(); };
-  }, []);
   useEffect(() => {
     if (isPreview) return;
     let disposed = false;
@@ -1179,35 +1250,6 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
     try { setDiag(await api.diagnostics()); } catch (err) { flash(message(err)); }
     finally { setBusy(""); }
   };
-  const restartCodex = async () => {
-    setBusy("restart-codex"); setLog("正在重启 Codex Desktop...");
-    try {
-      const result = await api.restartCodex();
-      setLog(result.log || (result.ok ? "Codex Desktop 已重启" : "Codex Desktop 重启失败"));
-      if (!result.ok) flash(result.log || "Codex Desktop 重启失败");
-    } catch (err) { setLog(message(err)); }
-    finally { setBusy(""); }
-  };
-  const localize = async (action: "install" | "uninstall" | "launch") => {
-    setBusy(`locale-${action}`);
-    setLocaleProgress({ percent: 0, detail: "准备汉化操作" });
-    setLocaleDetails([]);
-    setLocaleResult("");
-    try {
-      setLocaleResult(await api.codexLocalization(action));
-      await refreshBoot();
-    }
-    catch (err) {
-      const detail = message(err);
-      setLocaleResult(detail);
-      setLocaleDetails((lines) => [...lines.slice(-79), detail]);
-    }
-    finally { setBusy(""); }
-  };
-  const restoreLocale = async () => {
-    setRestoreConfirm(false);
-    await localize("uninstall");
-  };
   return <>
     <section className="section"><div className="section-header"><h2>工具安装</h2><button className="icon-button" title="重新检测" aria-label="重新检测"
       disabled={!!busy} onClick={detect}><RefreshCw size={17} className={busy === "detect" ? "spin" : ""} /></button></div>
@@ -1237,45 +1279,6 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
         </details>
       </div>}
     </section>
-    <section className="section"><div className="section-header"><h2>Codex Desktop</h2><Monitor size={18} /></div>
-      <div className="row wrap">
-        <button className="btn" disabled={!!busy || !report?.codex_desktop.installed || boot?.desktop_supported === false}
-          onClick={restartCodex}><RefreshCw size={16} className={busy === "restart-codex" ? "spin" : ""} />
-          {busy === "restart-codex" ? "重启中..." : "一键重启 Codex"}</button>
-      </div>
-    </section>
-    <section className="section"><div className="section-header"><h2>Codex Desktop 汉化</h2></div>
-      <p className="subtext">macOS 支持新版 ChatGPT Desktop 的 Codex 界面；旧版 ChatGPT Classic 不适用。</p>
-      <p className="subtext">{navigator.platform.toLowerCase().includes("mac")
-        ? "macOS 使用 Codex 原生语言设置切换为简体中文，设置后重新启动生效。"
-        : "Windows 使用非官方中文补丁（xqnode/codex-zh-CN v0.1.2），首次启动汉化版时会自动下载并校验语言包，可能需要管理员授权。"}</p>
-      <div className="row wrap">
-        <button className="btn primary" disabled={!!busy || !report?.codex_desktop.installed || boot?.desktop_supported === false}
-          onClick={() => localize("install")}><Languages size={16} />{busy === "locale-install" ? "汉化中..." : "一键汉化 Codex"}</button>
-        <button className="btn" disabled={!!busy || boot?.desktop_supported === false || !report?.codex_desktop.installed} onClick={() => localize("launch")}>
-          <Monitor size={16} />启动汉化版</button>
-        <button className="btn" disabled={!!busy || boot?.desktop_supported === false || !boot?.codex_localization_available}
-          onClick={() => setRestoreConfirm(true)}>
-          <RotateCcw size={16} />恢复英文</button>
-      </div>
-      {localeProgress && <div className="localization-progress" aria-live="polite">
-        <div className="localization-progress-heading"><strong>{localeProgress.detail}</strong><span>{localeProgress.percent}%</span></div>
-        <div className="progress-track" role="progressbar" aria-valuenow={localeProgress.percent} aria-valuemin={0} aria-valuemax={100}>
-          <span style={{ width: `${localeProgress.percent}%` }} /></div>
-        {localeResult && <p className="localization-result">{localeResult}</p>}
-        <details open={!!busy && busy.startsWith("locale-")}>
-          <summary>汉化详情</summary>
-          <pre className="log localization-log">{localeDetails.join("\n")}</pre>
-        </details>
-      </div>}
-      {!report?.node.installed && <small className="subtext">需先安装 Node.js。</small>}
-    </section>
-    {restoreConfirm && <div className="dialog-backdrop"><div className="dialog" role="alertdialog" aria-modal="true"
-      aria-labelledby="restore-locale-title"><h2 id="restore-locale-title">恢复英文界面</h2>
-      <p>将移除 Codex 汉化补丁并恢复英文界面，是否继续？</p>
-      <div className="row wrap"><button className="btn" disabled={!!busy} onClick={() => setRestoreConfirm(false)}>取消</button>
-        <button className="btn primary" disabled={!!busy} onClick={() => void restoreLocale()}>确认恢复</button></div>
-    </div></div>}
     <section className="section"><div className="section-header"><h2>诊断与修复</h2><Stethoscope size={18} /></div>
       <div className="row wrap"><button className="btn primary" disabled={!!busy || boot?.desktop_supported === false} onClick={diagnose}>
         <Stethoscope size={16} />{busy === "diag" ? "检测中..." : "开始检测（少量计费）"}</button>

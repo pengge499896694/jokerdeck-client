@@ -1,9 +1,9 @@
-v0.1.31
+v0.1.32
 
-- 修复嵌入网页版后最小化到托盘无法恢复窗口的问题，Windows/macOS 共用修复。
-- 托盘左键和右键「显示窗口」均恢复原生主窗口。
-- 重复启动和 macOS Dock 重新打开也使用同一恢复逻辑。
-- 包含 v0.1.29 的独立自助渠道监控入口，用户检测正常计费，管理员结果共享。
+- Windows 安装与卸载界面默认使用简体中文。
+- 新增 Codex Provider 会话同步、自动备份及恢复，支持配置后自动同步。
+- 新增 Windows/macOS Codex 主题与输入框 Token、费用浮条。
+- 简化汉化入口与重启进度，官方会话列表新增带二次确认的删除快捷入口。
+- 修复计费测试误判，刷新按钮增加文字，中转站增加加载过渡。
 
-- Fixed native window restoration after opening embedded website views on Windows and macOS.
-- Includes self-service monitoring introduced in v0.1.29.
+会话费用仅匹配最近 100 条账单，不完整显示 ≈，未匹配显示 —。macOS 增强界面仍需实机验证；Provider 同步不能保证跨账号的加密会话可以继续。

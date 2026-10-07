@@ -122,7 +122,7 @@ pub async fn run(state: &AppState) -> DiagReport {
                     ));
                     if valid {
                         targets.push(("Codex 接口", format!("{}/responses", url.trim_end_matches('/')), model.into(),
-                            json!({"model":model,"input":"ping","max_output_tokens":16,"stream":false})));
+                            json!({"model":model,"input":"ping","max_output_tokens":128,"stream":true})));
                     }
                 }
                 Ok(_) => {}
@@ -152,23 +152,10 @@ pub async fn run(state: &AppState) -> DiagReport {
             .send()
             .await;
         items.push(match result {
-            Ok(response) => {
-                let status = response.status();
-                // Consume the bounded smoke-test response; status alone does
-                // not catch truncated SSE or errors inside an HTTP 200 body.
-                match response.json::<Value>().await {
-                    Ok(body) => item(
-                        name,
-                        status.is_success() && body.get("error").is_none(),
-                        format!("HTTP {} · 模型 {model}", status.as_u16()),
-                    ),
-                    Err(_) => item(
-                        name,
-                        false,
-                        format!("HTTP {} · 返回内容无效或连接中断", status.as_u16()),
-                    ),
-                }
-            }
+            Ok(response) => match crate::model_probe::read(response).await {
+                Ok((ok, detail)) => item(name, ok, format!("{detail} · 模型 {model}")),
+                Err(error) => item(name, false, error),
+            },
             Err(_) => item(name, false, "请求超时或代理不可达，请重新应用配置后重试"),
         });
     }

@@ -377,7 +377,10 @@ printf '\nClaude Code 已安装到 %s\n如终端找不到 claude，请将 $HOME/
         "codex" => sh("npm i -g @openai/codex").await,
         "node" => {
             if cfg!(windows) {
-                sh("winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements").await
+                let (updated, log) = sh("winget upgrade -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements").await;
+                if updated { (true, log) } else {
+                    sh("winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements").await
+                }
             } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
                 #[cfg(target_os = "macos")]
                 return install_macos_node_pkg().await;

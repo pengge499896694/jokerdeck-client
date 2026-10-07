@@ -38,6 +38,19 @@ pub struct Settings {
     #[serde(default)]
     pub computer_use: bool,
     pub update_manifest_url: Option<String>,
+    #[serde(default = "native_theme")]
+    pub codex_theme: String,
+    #[serde(default = "overlay_default")]
+    pub usage_overlay: bool,
+    #[serde(default)]
+    pub provider_auto_sync: bool,
+}
+
+fn native_theme() -> String {
+    "native".into()
+}
+fn overlay_default() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -51,6 +64,9 @@ impl Default for Settings {
             codex_model: None,
             computer_use: false,
             update_manifest_url: None,
+            codex_theme: native_theme(),
+            usage_overlay: true,
+            provider_auto_sync: false,
         }
     }
 }

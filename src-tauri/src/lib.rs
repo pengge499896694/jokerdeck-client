@@ -7,9 +7,12 @@ mod codex_localization;
 mod codex_sessions;
 mod commands;
 mod config_writer;
+mod desktop_features;
 mod diagnostics;
+mod model_probe;
 mod proxy;
 mod secret_store;
+mod sidebar_delete;
 mod startup;
 mod state;
 mod updater;
@@ -133,6 +136,7 @@ pub fn run() {
                 proxy_runtime: tokio::sync::Mutex::new(None),
                 configuration_lock: tokio::sync::Mutex::new(()),
             });
+            desktop_features::start(app_state.clone())?;
             app.manage(app_state);
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -213,6 +217,9 @@ pub fn run() {
             commands::read_codex_session,
             commands::delete_codex_session,
             commands::codex_enhancement_status,
+            commands::desktop_feature_status,
+            commands::configure_desktop_features,
+            commands::provider_sync_action,
             commands::enable_codex_marketplace,
             commands::register_codex_plugin_cache,
             commands::run_diagnostics,

@@ -157,6 +157,16 @@ export interface UpdateProgress {
   total?: number;
 }
 
+export interface DesktopFeatureStatus {
+  theme: string; overlay: boolean; auto_sync: boolean; sync_installed: boolean; provider: string;
+}
+export interface ProviderSyncResult {
+  currentProvider?: string; rolloutCounts?: Record<string, number>;
+  sessionFilesUpdated?: number; sqliteRowsUpdated?: number; backupDir?: string;
+  backups?: { path?: string; backupDir?: string; name?: string; createdAt?: string }[];
+  skippedLockedRolloutFiles?: string[];
+}
+
 export interface Bootstrap {
   logged_in: boolean;
   last_email?: string;
@@ -258,6 +268,11 @@ export const api = {
   codexSessions: () => call<CodexSession[]>("list_codex_sessions"),
   codexSession: (id: string) => call<CodexSessionDetail>("read_codex_session", { id }),
   deleteCodexSession: (id: string) => call<void>("delete_codex_session", { id }),
+  desktopFeatureStatus: () => call<DesktopFeatureStatus>("desktop_feature_status"),
+  configureDesktopFeatures: (theme: string, overlay: boolean, autoSync: boolean) =>
+    call<DesktopFeatureStatus>("configure_desktop_features", { theme, overlay, autoSync }),
+  providerSyncAction: (action: "install" | "status" | "sync" | "restore", backup?: string) =>
+    call<ProviderSyncResult>("provider_sync_action", { action, backup }),
   codexEnhancementStatus: () => call<CodexEnhancementStatus>("codex_enhancement_status"),
   enableCodexMarketplace: () => call<string>("enable_codex_marketplace"),
   registerCodexPluginCache: () => call<string>("register_codex_plugin_cache"),

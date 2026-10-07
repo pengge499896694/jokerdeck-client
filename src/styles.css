@@ -245,3 +245,14 @@ select.input { padding-right: 26px; text-overflow: ellipsis; }
   .detail { max-width: 55%; }
   .login-page { padding-top: 20px; }
 }
+
+.site-loading { min-height: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; color: var(--muted, #64748b); background: #f5f7fb; }
+.localization-progress .progress-track span { transition: width .45s ease; }
+@media (prefers-reduced-motion: reduce) { .localization-progress .progress-track span { transition: none; } .site-loading .spin { animation: none; } }
+
+.theme-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:16px 0}
+.theme-card{position:relative;display:flex;flex-direction:column;gap:10px;padding:10px;border:1px solid var(--border,#e2e8f0);border-radius:14px;background:transparent;color:inherit;text-align:left;cursor:pointer;transition:transform .2s,border-color .2s,box-shadow .2s}
+.theme-card:hover{transform:translateY(-2px)}.theme-card.selected{border-color:#7c6cea;box-shadow:0 0 0 2px #7c6cea22}.theme-card>svg{position:absolute;right:12px;bottom:12px;color:#7c6cea}.theme-card:disabled{opacity:.6;cursor:wait}
+.theme-preview{height:70px;width:100%;border-radius:9px;display:flex;align-items:center;padding:12px;gap:8px}.theme-preview span:first-child{width:22%;height:100%;border-radius:5px;opacity:.8}.theme-preview span:last-child{width:62%;height:8px;border-radius:8px;opacity:.7}
+.feature-toggle{display:flex;align-items:center;gap:9px;margin:16px 0;font-size:13px;cursor:pointer}.feature-toggle input{accent-color:#7c6cea;width:16px;height:16px}.provider-counts{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.provider-backups{margin-top:16px}.usage-preview{display:flex;align-items:center;gap:10px;background:#fff7fb;border:1px solid #eed9e5;border-radius:15px;padding:15px;margin:16px 0;color:#79627d;flex-wrap:wrap}.usage-preview>span{display:flex;align-items:center;gap:7px;font-size:12px;background:#a93f790a;padding:6px 10px;border-radius:9px}.usage-preview strong{color:#3d2340;font-variant-numeric:tabular-nums}
+@media(max-width:850px){.theme-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(prefers-reduced-motion:reduce){.theme-card{transition:none}.theme-card:hover{transform:none}}

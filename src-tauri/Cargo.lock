@@ -2121,13 +2121,14 @@ dependencies = [
 
 [[package]]
 name = "jokerdeck-desktop"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "anyhow",
  "axum",
  "bytes",
  "dirs 5.0.1",
  "futures-util",
+ "getrandom 0.4.3",
  "http",
  "keyring",
  "reqwest 0.12.28",
