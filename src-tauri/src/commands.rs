@@ -352,6 +352,7 @@ fn site_path(page: &str) -> CmdResult<&'static str> {
         "dashboard" => Ok("/dashboard"),
         "keys" => Ok("/keys"),
         "usage" => Ok("/usage"),
+        "self-monitor" => Ok("/self-monitor"),
         "subscriptions" => Ok("/subscriptions"),
         "store" => Ok("/store"),
         "profile" => Ok("/profile"),

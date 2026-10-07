@@ -1,28 +1,8 @@
-v0.1.27
+v0.1.29
 
-- 新增公开分组与专属分组分开展示。
-- Added separate sections for public and exclusive groups.
-- 优化客户端安装与官网更新链路。
+- 新增独立「自助渠道监控」入口，与网页版使用相同功能。
+- 用户可用自己的分组 Key 检测所选分组或全部分组，按正常分组用量计费。
+- 管理员可额外检测单个或全部上游渠道，并共享检测结果。
+- 检测前提示费用，查看页面不会自动消耗 token。
 
-更新内容：
-
-- 修复 macOS ChatGPT/Codex 一键重启和汉化启动误报“已启动请求但未运行”。
-- macOS 启动前自动终止正在运行的 ChatGPT，再设置中文并重新启动。
-- 新手引导改为可选入口，支持“我是老手，直接跳过”。
-- 新手引导改为遮罩高亮框，按分组、模型、Agent、一键配置和工具与修复逐步操作。
-- 修复 macOS 从 Dock、菜单栏或托盘重新打开时只显示菜单、不显示客户端窗口。
-- 修复 macOS 一键重启汉化 Codex 偶尔启动为英文的问题。
-- 优化 sub2api 模型与分组请求速度，增加一键配置进度条和新手引导。
-- 修复 macOS 最小化到托盘后无法通过左键或右键菜单恢复窗口。
-- macOS 托盘左键直接显示窗口，右键保留菜单，并重新激活应用到前台。
-- 修复 Apple Silicon 上的 x64 Rosetta npm 跳过 `darwin-arm64` optional dependency，导致 Claude Code 安装失败。
-- 安装脚本返回网页时直接回退 npm，并校验原生包与 Claude Code 命令。
-- 工具安装日志右上角新增一键复制按钮，便于提交完整错误日志。
-
-v0.1.28
-
-- 修复 Windows 托盘左键和右键无法恢复窗口。
-- 修复重复启动，自动聚焦已打开的客户端。
-- 更新弹窗支持滚动查看当前版本更新内容，按钮始终可见。
-- Fixed Windows tray restore and single-instance focus.
-- Made update notes scrollable with visible actions.
+- Added self-service channel monitoring with group Key checks and shared admin results.

@@ -33,6 +33,7 @@ const siteTabs = [
   { id: "dashboard", title: "网站概览", icon: LayoutDashboard },
   { id: "keys", title: "API Key", icon: KeyRound },
   { id: "usage", title: "使用记录", icon: ChartNoAxesCombined },
+  { id: "self-monitor", title: "自助渠道监控", icon: Stethoscope },
   { id: "subscriptions", title: "我的订阅", icon: CreditCard },
   { id: "store", title: "店铺销售", icon: Store },
   { id: "profile", title: "账户与安全", icon: UserRound },
