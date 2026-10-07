@@ -159,6 +159,7 @@ export interface UpdateProgress {
 
 export interface DesktopFeatureStatus {
   theme: string; overlay: boolean; auto_sync: boolean; sync_installed: boolean; provider: string;
+  node_version?: string;
 }
 export interface ProviderSyncResult {
   currentProvider?: string; rolloutCounts?: Record<string, number>;
@@ -263,6 +264,8 @@ export const api = {
   installCli: (which: string) => call<InstallResult>("install_cli", { which }),
   downloadCodexDesktop: () => call<InstallResult>("download_codex_desktop"),
   restartCodex: () => call<InstallResult>("restart_codex"),
+  codexDesktopRunning: () => call<boolean>("codex_desktop_running"),
+  stopCodexDesktop: () => call<void>("stop_codex_desktop"),
   codexLocalization: (action: "install" | "uninstall" | "launch") =>
     call<string>("codex_localization", { action }),
   codexSessions: () => call<CodexSession[]>("list_codex_sessions"),

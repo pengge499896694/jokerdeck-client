@@ -1376,6 +1376,18 @@ pub async fn restart_codex(state: State<'_, SharedState>) -> CmdResult<InstallRe
 }
 
 #[tauri::command]
+pub async fn codex_desktop_running() -> CmdResult<bool> {
+    crate::codex_desktop::running().await.map_err(e)
+}
+
+#[tauri::command]
+pub async fn stop_codex_desktop(state: State<'_, SharedState>) -> CmdResult<()> {
+    let state = state.inner().clone();
+    let _guard = state.configuration_lock.lock().await;
+    crate::codex_desktop::stop().await.map_err(e)
+}
+
+#[tauri::command]
 pub async fn codex_localization(
     app: AppHandle,
     state: State<'_, SharedState>,

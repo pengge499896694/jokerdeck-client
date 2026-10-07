@@ -1,3 +1,11 @@
+v0.1.33
+
+- 修复 Provider metadata 同步：自动选择支持 SQLite backup 的 Node.js 24+，保留会话与 SQLite 备份恢复能力。
+- 修复 Codex 插件状态误判，恢复插件市场启用入口。
+- 修复 Codex 换肤与 Token / 费用浮条未注入的问题，仅修改客户端管理的汉化副本并自动备份。
+- 修复更新清单多源选择、HTTP 错误识别和不完整安装包校验。
+- 增加 Codex Desktop 运行状态、启动、重启与确认关闭控制。
+
 v0.1.32
 
 - Windows 安装与卸载界面默认使用简体中文。

@@ -329,9 +329,11 @@ pub struct FeatureStatus {
     pub auto_sync: bool,
     pub sync_installed: bool,
     pub provider: String,
+    pub node_version: Option<String>,
 }
 pub async fn status(state: &SharedState) -> Result<FeatureStatus> {
     let settings = state.store.read().await.settings.clone();
+    let node_version = compatible_node().await.ok().map(|(_, version)| version);
     let config = std::fs::read_to_string(crate::config_writer::codex_config_path()?)
         .unwrap_or_default()
         .parse::<toml_edit::DocumentMut>()?;
@@ -345,6 +347,7 @@ pub async fn status(state: &SharedState) -> Result<FeatureStatus> {
             .and_then(|v| v.as_str())
             .unwrap_or("openai")
             .to_owned(),
+        node_version,
     })
 }
 pub async fn configure(
@@ -377,18 +380,7 @@ pub async fn provider_action(
     if !matches!(action, "install" | "status" | "sync" | "restore") {
         bail!("不支持的 Provider 操作");
     }
-    let probe = process("node")
-        .args([
-            "--input-type=module",
-            "-e",
-            "import {backup} from 'node:sqlite'; if (typeof backup !== 'function') process.exit(1)",
-        ])
-        .output()
-        .await
-        .context("未找到 Node.js，请先在工具与修复安装 Node.js 24+")?;
-    if !probe.status.success() {
-        bail!("Provider 同步需要 Node.js 24+（含 SQLite backup），请先升级 Node.js");
-    }
+    let (node, _) = compatible_node().await?;
     let service = service_path(&state.app_dir);
     if action == "install" {
         let prefix = state.app_dir.join("provider-sync");
@@ -432,7 +424,7 @@ pub async fn provider_action(
         .parent()
         .context("配置目录无效")?
         .to_owned();
-    let mut command = process("node");
+    let mut command = process(node.as_os_str());
     command
         .arg(wrapper)
         .arg(service)
@@ -459,25 +451,53 @@ pub async fn provider_action(
     }
     serde_json::from_slice(&output.stdout).context("同步组件返回了无效结果")
 }
-fn process(program: &str) -> tokio::process::Command {
-    let mut resolved = std::path::PathBuf::from(program);
-    if program == "node" {
-        #[cfg(windows)]
-        if let Some(path) = std::env::var_os("ProgramFiles")
-            .map(|root| std::path::PathBuf::from(root).join("nodejs/node.exe"))
-            .filter(|path| path.is_file())
-        {
-            resolved = path;
+async fn compatible_node() -> Result<(std::path::PathBuf, String)> {
+    let name = if cfg!(windows) { "node.exe" } else { "node" };
+    let mut candidates = Vec::new();
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("ProgramFiles") {
+        candidates.push(std::path::PathBuf::from(root).join("nodejs").join(name));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.extend([
+        std::path::PathBuf::from("/opt/homebrew/bin/node"),
+        std::path::PathBuf::from("/usr/local/bin/node"),
+    ]);
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|dir| dir.join(name)));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for candidate in candidates
+        .into_iter()
+        .filter(|path| path.is_file())
+        .take(32)
+    {
+        if !seen.insert(candidate.clone()) {
+            continue;
         }
-        #[cfg(target_os = "macos")]
-        for path in ["/opt/homebrew/bin/node", "/usr/local/bin/node"] {
-            if std::path::Path::new(path).is_file() {
-                resolved = path.into();
-                break;
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            process(candidate.as_os_str())
+                .args([
+                    "--input-type=module",
+                    "-e",
+                    "import {backup} from 'node:sqlite'; if (typeof backup !== 'function') process.exit(1); console.log(process.version)",
+                ])
+                .output(),
+        )
+        .await;
+        if let Ok(Ok(output)) = result {
+            if output.status.success() {
+                let version = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                return Ok((candidate, version));
             }
         }
     }
-    let mut cmd = tokio::process::Command::new(resolved);
+    bail!("未找到支持 SQLite backup 的 Node.js 24+。请在工具与修复升级 Node.js 后重试")
+}
+
+fn process(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(program);
     cmd.kill_on_drop(true);
     #[cfg(target_os = "macos")]
     cmd.env(

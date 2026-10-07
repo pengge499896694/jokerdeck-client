@@ -5,7 +5,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   ArrowRight, Check, ChevronRight, CircleHelp, Copy, Download, Eye, EyeOff,
   KeyRound, LayoutDashboard, LogOut, Maximize2, Minimize2, Minus, Monitor, RefreshCw, CreditCard,
-  ChartNoAxesCombined, Store, History, Search, Sparkles, Trash2,
+  ChartNoAxesCombined, Store, History, Search, Sparkles,
   Settings2, ShieldCheck, Stethoscope, UserRound, Wallet, X, Power, RotateCcw, Bell, Users, Folder, Globe, Receipt, SlidersHorizontal,
 } from "lucide-react";
 import { api, isPreview, type Bootstrap, type UserInfo, type ProxyStatus, type HostHealth, type CliReport,
@@ -921,8 +921,6 @@ function Sessions({ flash }: { flash: (text: string) => void }) {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [reading, setReading] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState<CodexSession | null>(null);
   const refresh = async () => {
     setLoading(true);
     try { setItems(await api.codexSessions()); }
@@ -937,22 +935,6 @@ function Sessions({ flash }: { flash: (text: string) => void }) {
     finally { setReading(false); }
   };
   const filtered = items.filter((item) => `${item.title} ${item.id}`.toLowerCase().includes(query.toLowerCase()));
-  const remove = async (item: CodexSession) => {
-    setDeleting(true);
-    try {
-      await api.deleteCodexSession(item.id);
-      setItems((current) => current.filter((entry) => entry.id !== item.id));
-      if (selected === item.id) {
-        setSelected("");
-        setDetail(null);
-      }
-      flash("会话已永久删除");
-    } catch (err) { flash(message(err)); }
-    finally {
-      setDeleting(false);
-      setConfirmingDelete(null);
-    }
-  };
   return <section className="section sessions-section">
     <div className="section-header"><h2>最近 100 条本地会话</h2><button className="icon-button" title="刷新会话"
       aria-label="刷新会话" disabled={loading} onClick={refresh}><RefreshCw size={17} className={loading ? "spin" : ""} /></button></div>
@@ -964,15 +946,11 @@ function Sessions({ flash }: { flash: (text: string) => void }) {
           <button type="button" className="session-item-main" onClick={() => void select(item.id)}>
             <strong>{item.title}</strong><small>{new Date(item.updated_at * 1000).toLocaleString()} · {(item.size / 1024).toFixed(0)} KB</small>
           </button>
-          <button type="button" className="icon-button session-item-delete" title="删除会话" aria-label={`删除会话 ${item.title}`}
-            disabled={deleting} onClick={() => setConfirmingDelete(item)}><Trash2 size={15} /></button>
         </div>)}
         {!loading && !filtered.length && <p className="muted">{query ? "没有匹配的会话" : "没有本地会话"}</p>}
       </div>
       <div className="session-preview">
         {reading ? <span className="muted">读取中...</span> : detail ? <>
-          <div className="session-actions"><button className="btn small" disabled={deleting}
-            onClick={() => setConfirmingDelete(items.find((item) => item.id === selected) ?? null)}><Trash2 size={14} />删除会话</button></div>
           {detail.truncated && <div className="alert warning">会话过长，仅显示已读取部分。</div>}
           {detail.messages.length ? detail.messages.map((item, index) => <article className="session-message" key={index}>
             <strong>{item.role === "user" ? "用户" : "Codex"}</strong><pre>{item.text}</pre>
@@ -980,20 +958,6 @@ function Sessions({ flash }: { flash: (text: string) => void }) {
         </> : <span className="muted">选择会话查看消息</span>}
       </div>
     </div>
-    {confirmingDelete && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget && !deleting) setConfirmingDelete(null);
-    }}>
-      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-session-title">
-        <h3 id="delete-session-title">删除会话</h3>
-        <p>永久删除「{confirmingDelete.title}」？此操作无法撤销。</p>
-        <div className="modal-actions">
-          <button type="button" className="btn" disabled={deleting} onClick={() => setConfirmingDelete(null)}>取消</button>
-          <button type="button" className="btn danger" disabled={deleting} onClick={() => void remove(confirmingDelete)}>
-            <Trash2 size={14} />{deleting ? "删除中..." : "删除"}
-          </button>
-        </div>
-      </div>
-    </div>}
   </section>;
 }
 
@@ -1007,6 +971,7 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
   const [featureError, setFeatureError] = useState("");
   const [syncLog, setSyncLog] = useState("");
   const [confirmation, setConfirmation] = useState<{ action: "sync" | "restore"; backup?: string } | null>(null);
+  const nodeReady = Boolean(features?.node_version);
   const themes = [
     { id: "native", name: "原生", colors: ["#f5f5f5", "#202020", "#8b8b8b"] },
     { id: "rose", name: "玫瑰柔光", colors: ["#fff7fb", "#a93f79", "#3d2340"] },
@@ -1031,7 +996,9 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
     } catch (err) { setFeatureError(message(err)); setSyncLog("操作未完成，请查看提示；上游备份会保留"); }
     finally { setBusy(""); }
   };
-  useEffect(() => { api.desktopFeatureStatus().then(setFeatures).catch((err) => setFeatureError(message(err))); }, []);
+  useEffect(() => {
+    api.desktopFeatureStatus().then(setFeatures).catch((err) => setFeatureError(message(err)));
+  }, []);
   const refresh = async () => {
     try { setStatus(await api.codexEnhancementStatus()); }
     catch (err) { flash(message(err)); }
@@ -1044,20 +1011,32 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
     finally { setBusy(""); }
   };
   return <>
+    <section className="section"><div className="section-header"><h2>Codex 换肤</h2><span className="tag">Windows 汉化副本</span></div>
+      <div className="theme-grid">{themes.map((theme) => <button className={`theme-card ${features?.theme === theme.id ? "selected" : ""}`} key={theme.id}
+        disabled={!!busy || !features || navigator.platform.toLowerCase().includes("mac")}
+        onClick={() => features && void updateFeatures(theme.id, features.overlay, features.auto_sync)}
+        aria-pressed={features?.theme === theme.id}>
+        <span className="theme-preview" style={{ background: theme.colors[0] }}><span style={{ background: theme.colors[1] }} /><span style={{ background: theme.colors[2] }} /></span>
+        <strong>{theme.name}</strong>{features?.theme === theme.id && <Check size={15} />}
+      </button>)}</div>
+      <small className="subtext">选择后启动或重启汉化版 Codex 生效；原生主题可恢复默认颜色。仅修改客户端管理的副本。</small>
+    </section>
     <section className="section">
       <div className="section-header"><h2>服务商切换 · 会话保护</h2><span className="tag">{features?.provider ?? "检测中"}</span></div>
       <p className="subtext">将历史会话和 SQLite 索引对齐到当前 Provider，找回切换后隐藏的会话。修改前自动备份，保留历史模型与聊天内容。</p>
       <div className="row wrap">
-        {!features?.sync_installed && <button className="btn primary" disabled={!!busy || !features} onClick={() => void provider("install")}><Download size={16} />{busy === "provider-install" ? "安装中..." : "安装同步组件"}</button>}
-        <button className="btn" disabled={!!busy || !features?.sync_installed} onClick={() => void provider("status")}><Search size={16} />检查同步状态</button>
-        <button className="btn primary" disabled={!!busy || !features?.sync_installed} onClick={() => setConfirmation({ action: "sync" })}><RefreshCw size={16} className={busy === "provider-sync" ? "spin" : ""} />同步历史会话</button>
+        {!features?.sync_installed && <button className="btn primary" disabled={!!busy || !features || !nodeReady} onClick={() => void provider("install")}><Download size={16} />{busy === "provider-install" ? "安装中..." : "安装同步组件"}</button>}
+        <button className="btn" disabled={!!busy || !features?.sync_installed || !nodeReady} onClick={() => void provider("status")}><Search size={16} />检查同步状态</button>
+        <button className="btn primary" disabled={!!busy || !features?.sync_installed || !nodeReady} onClick={() => setConfirmation({ action: "sync" })}><RefreshCw size={16} className={busy === "provider-sync" ? "spin" : ""} />同步历史会话</button>
         <button className="btn" disabled={!!busy} onClick={() => action("node-upgrade", async () => {
           const result = await api.installCli("node");
           if (!result.ok) throw new Error(result.log || "Node.js 升级失败");
+          setFeatures(await api.desktopFeatureStatus());
           return result.log || "Node.js 已安装，请重新检查同步组件";
         })}><Download size={16} />安装 / 升级 Node.js</button>
         <button className="btn" onClick={goTools}><Monitor size={16} />环境检查</button>
       </div>
+      {!nodeReady && features && <div className="alert warning" role="status">未找到支持 SQLite backup 的 Node.js 24+。请先升级 Node.js，再安装同步组件。</div>}
       <label className="feature-toggle"><input type="checkbox" checked={features?.auto_sync ?? false} disabled={!!busy || !features?.sync_installed}
         onChange={(event) => features && void updateFeatures(features.theme, features.overlay, event.target.checked)} /><span>应用 Codex 配置后自动同步 Provider</span></label>
       {sync?.rolloutCounts && <div className="provider-counts">{Object.entries(sync.rolloutCounts).map(([name, count]) => <span className="tag" key={name}>{name} · {count}</span>)}</div>}
@@ -1068,14 +1047,6 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
       })}</div>}
       {syncLog && <p className="subtext" aria-live="polite">{syncLog}</p>}
       <small className="subtext">基于 codex-provider-sync 0.5.0，需要 Node.js 24+。元数据同步不能保证跨账号或 Provider 的加密会话仍可继续。</small>
-    </section>
-    <section className="section"><div className="section-header"><h2>Codex 换肤</h2><span className="tag">Windows / macOS</span></div>
-      <div className="theme-grid">{themes.map((theme) => <button className={`theme-card ${features?.theme === theme.id ? "selected" : ""}`} key={theme.id}
-        disabled={!!busy || !features} onClick={() => features && void updateFeatures(theme.id, features.overlay, features.auto_sync)} aria-pressed={features?.theme === theme.id}>
-        <span className="theme-preview" style={{ background: theme.colors[0] }}><span style={{ background: theme.colors[1] }} /><span style={{ background: theme.colors[2] }} /></span>
-        <strong>{theme.name}</strong>{features?.theme === theme.id && <Check size={15} />}
-      </button>)}</div>
-      <small className="subtext">首次使用请在首页点击「一键重启汉化」安装增强；之后切换主题自动生效，选择「原生」恢复默认外观。</small>
     </section>
     <section className="section"><div className="section-header"><h2>Token 与费用</h2><ChartNoAxesCombined size={18} /></div>
       <label className="feature-toggle"><input type="checkbox" checked={features?.overlay ?? true} disabled={!!busy || !features}
@@ -1194,6 +1165,13 @@ function Tools({ boot, flash, goSetup }: {
   const [log, setLog] = useState("");
   const [downloadProgress, setDownloadProgress] = useState<{ percent: number; detail: string } | null>(null);
   const [downloadDetails, setDownloadDetails] = useState<string[]>([]);
+  const [desktopRunning, setDesktopRunning] = useState<boolean | null>(null);
+  const [confirmStop, setConfirmStop] = useState(false);
+  const refreshDesktop = async () => {
+    if (isPreview) return;
+    try { setDesktopRunning(await api.codexDesktopRunning()); }
+    catch (err) { setDesktopRunning(null); flash(message(err)); }
+  };
   useEffect(() => {
     if (isPreview) return;
     let disposed = false;
@@ -1207,7 +1185,11 @@ function Tools({ boot, flash, goSetup }: {
   }, []);
   const detect = async () => {
     setBusy("detect");
-    try { setReport(await api.detectClis()); } catch (err) { setLog(message(err)); }
+    try {
+      const [clis, running] = await Promise.all([api.detectClis(), api.codexDesktopRunning()]);
+      setReport(clis);
+      setDesktopRunning(running);
+    } catch (err) { setLog(message(err)); }
     finally { setBusy(""); }
   };
   useEffect(() => { detect(); }, []);
@@ -1250,7 +1232,36 @@ function Tools({ boot, flash, goSetup }: {
     try { setDiag(await api.diagnostics()); } catch (err) { flash(message(err)); }
     finally { setBusy(""); }
   };
+  const controlDesktop = async (action: "start" | "stop") => {
+    setConfirmStop(false);
+    setBusy(action);
+    try {
+      if (action === "stop") {
+        await api.stopCodexDesktop();
+        flash("Codex Desktop 已关闭");
+      } else {
+        const result = await api.restartCodex();
+        if (!result.ok) throw new Error(result.log);
+        flash(result.log);
+      }
+      await refreshDesktop();
+    } catch (err) { flash(message(err)); await refreshDesktop(); }
+    finally { setBusy(""); }
+  };
   return <>
+    <section className="section"><div className="section-header"><h2>Codex Desktop</h2>
+      <button className="icon-button" title="刷新运行状态" aria-label="刷新运行状态"
+        disabled={!!busy} onClick={() => void refreshDesktop()}><RefreshCw size={17} /></button></div>
+      <div className="list-row"><span className="row"><Monitor size={18} />运行状态</span>
+        <span className={`tag ${desktopRunning ? "success" : desktopRunning === false ? "warning" : ""}`}>
+          {desktopRunning === null ? "检测中" : desktopRunning ? "运行中" : "未运行"}</span></div>
+      <div className="row wrap">
+        <button className="btn primary" disabled={!!busy || !report?.codex_desktop.installed || boot?.desktop_supported === false}
+          onClick={() => void controlDesktop("start")}><Power size={16} />{busy === "start" ? "启动中..." : desktopRunning ? "重启" : "启动"}</button>
+        <button className="btn" disabled={!!busy || !desktopRunning} onClick={() => setConfirmStop(true)}>
+          <X size={16} />关闭</button>
+      </div>
+    </section>
     <section className="section"><div className="section-header"><h2>工具安装</h2><button className="icon-button" title="重新检测" aria-label="重新检测"
       disabled={!!busy} onClick={detect}><RefreshCw size={17} className={busy === "detect" ? "spin" : ""} /></button></div>
       {([
@@ -1287,6 +1298,12 @@ function Tools({ boot, flash, goSetup }: {
         {diag.items.map((item, index) => <div className="list-row" key={index}><span className="row">
           <span className={`dot ${item.ok ? "ok" : "error"}`} />{item.name}</span><span className="detail">{item.detail}</span></div>)}</div>}
     </section>
+    {confirmStop && <div className="dialog-backdrop"><div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="stop-codex-title">
+      <h2 id="stop-codex-title">关闭 Codex Desktop</h2>
+      <p>将强制关闭 Codex Desktop。请先保存正在编辑的内容。</p>
+      <div className="row"><button className="btn" onClick={() => setConfirmStop(false)}>取消</button>
+        <button className="btn danger" onClick={() => void controlDesktop("stop")}><Power size={16} />确认关闭</button></div>
+    </div></div>}
   </>;
 }
 

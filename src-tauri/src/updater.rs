@@ -39,11 +39,26 @@ pub struct UpdateProgress {
 
 pub async fn check(http: &reqwest::Client, manifest_url: &str) -> UpdateInfo {
     let mut last_error = None;
-    for source in manifest_sources(manifest_url) {
-        match check_source(http, source).await {
-            Ok(info) => return info,
+    let mut best: Option<UpdateInfo> = None;
+    let sources = manifest_sources(manifest_url);
+    let results =
+        futures_util::future::join_all(sources.iter().map(|source| check_source(http, source)))
+            .await;
+    for (source, result) in sources.into_iter().zip(results) {
+        match result {
+            Ok(info) => {
+                if best.as_ref().is_none_or(|previous| {
+                    parse(info.latest.as_deref().unwrap_or_default())
+                        > parse(previous.latest.as_deref().unwrap_or_default())
+                }) {
+                    best = Some(info);
+                }
+            }
             Err(error) => last_error = Some(format!("{source}: {error}")),
         }
+    }
+    if let Some(info) = best {
+        return info;
     }
     UpdateInfo {
         current: CURRENT_VERSION.into(),
@@ -146,6 +161,10 @@ pub async fn download_and_install(
             },
         );
     }
+    if total == 0 || total_size.is_some_and(|expected| expected != total) {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        return Err("更新包下载不完整，请重试".into());
+    }
     file.flush()
         .await
         .map_err(|error| format!("保存更新包失败：{error}"))?;
@@ -201,6 +220,9 @@ async fn check_source(http: &reqwest::Client, source: &str) -> Result<UpdateInfo
         .await
         .map_err(|error| format!("连接失败：{error}"))?;
     let status = response.status();
+    if !status.is_success() {
+        return Err(format!("更新源返回 HTTP {status}"));
+    }
     let text = response
         .text()
         .await

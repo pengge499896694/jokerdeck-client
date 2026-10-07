@@ -19,7 +19,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const INTEGRITY_MARKER: &[u8] = b"app.asar\",\"alg\":\"SHA256\",\"value\":\"";
 
 /// 计算 app.asar 头部字符串的 SHA-256（小写十六进制），与 Electron 的校验口径一致。
-pub(crate) fn asar_header_hash(asar: &Path) -> Result<String> {
+fn asar_header_hash(asar: &Path) -> Result<String> {
     let data = std::fs::read(asar).with_context(|| format!("无法读取 {}", asar.display()))?;
     if data.len() < 16 {
         bail!("app.asar 头部过短");
@@ -158,7 +158,7 @@ pub(crate) fn macos_codex_app() -> Option<PathBuf> {
         roots.push(home.join("Applications"));
     }
     for root in roots {
-        for name in ["ChatGPT.app", "Codex.app"] {
+        for name in ["Codex.app", "ChatGPT.app"] {
             let app = root.join(name);
             if !app.join("Contents/Resources/app.asar").is_file() {
                 continue;
@@ -329,8 +329,9 @@ async fn run_tool(program: &str, args: &[&str]) -> Result<(bool, String)> {
 
 /// 只关闭 Codex Desktop 自身的进程：按安装路径过滤，避免误杀同名的 ChatGPT 桌面端或
 /// VSCode 的 codex CLI。
-const WINDOWS_STOP_SCRIPT: &str = r#"
+const WINDOWS_PROCESS_SCRIPT: &str = r#"
 $ErrorActionPreference = 'SilentlyContinue'
+function Get-CodexProcess {
 Get-Process -Name ChatGPT, Codex, codex-helper, CodexHelper -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -and (
         $_.Path -notmatch '(?i)\\Codex\+\+\\|codex-plus-plus' -and
@@ -340,13 +341,31 @@ Get-Process -Name ChatGPT, Codex, codex-helper, CodexHelper -ErrorAction Silentl
             $_.Path -like '*\Programs\Codex\*' -or
             $_.Path -like '*\Codex\*'
         )
-    ) } |
-    Stop-Process -Force
-Start-Sleep -Milliseconds 400"#;
+    ) }
+}"#;
 
-async fn stop() -> Result<()> {
+pub async fn running() -> Result<bool> {
     if cfg!(windows) {
-        let (ok, log) = powershell(WINDOWS_STOP_SCRIPT, &[], 20).await?;
+        let script = format!("{WINDOWS_PROCESS_SCRIPT}\nif (Get-CodexProcess) {{ 'running' }}");
+        let (ok, output) = powershell(&script, &[], 20).await?;
+        if !ok {
+            bail!("无法检测 Codex Desktop 状态：{output}");
+        }
+        Ok(output.trim() == "running")
+    } else if cfg!(target_os = "macos") {
+        match macos_codex_app() {
+            Some(app) => macos_app_running(&app).await,
+            None => Ok(false),
+        }
+    } else {
+        Ok(false)
+    }
+}
+
+pub async fn stop() -> Result<()> {
+    if cfg!(windows) {
+        let script = format!("{WINDOWS_PROCESS_SCRIPT}\nGet-CodexProcess | Stop-Process -Force\nStart-Sleep -Milliseconds 400");
+        let (ok, log) = powershell(&script, &[], 20).await?;
         if !ok {
             bail!("无法关闭 Codex Desktop：{log}");
         }
@@ -497,38 +516,11 @@ async fn launch_macos(app_bundle: &Path, localized: bool) -> Result<(bool, Strin
 
 /// 启动「汉化版」Codex：关闭现有进程 → 校正完整性 → 写入 zh-CN → 启动补丁副本。
 /// 仅用于显式点击「启动汉化版」按钮。
-pub(crate) async fn launch_localized_with_progress(
-    report: &(dyn Fn(crate::codex_localization::LocalizationProgress) + Send + Sync),
-) -> Result<String> {
-    let emit = |percent, detail: &str| {
-        report(crate::codex_localization::LocalizationProgress {
-            percent,
-            detail: detail.into(),
-        })
-    };
-    let app =
-        macos_codex_app().ok_or_else(|| anyhow!("未找到支持 Codex 的 ChatGPT / Codex 应用"))?;
-    emit(40, "正在关闭当前 ChatGPT / Codex");
-    stop().await?;
-    emit(60, "应用简体中文语言设置");
-    set_macos_locale(Some("zh-CN")).await?;
-    set_locale_zh_cn()?;
-    emit(72, "添加会话删除图标与官方确认弹窗");
-    let app = crate::sidebar_delete::macos_copy(&app).await?;
-    emit(85, "正在启动 ChatGPT / Codex");
-    let (ok, log) = launch_macos(&app, true).await?;
-    if !ok {
-        bail!("启动失败：{log}");
-    }
-    emit(100, "ChatGPT / Codex 启动完成");
-    Ok("已启动简体中文版本。".into())
-}
-
 pub async fn launch_localized() -> Result<String> {
     if cfg!(windows) {
         let app = patched_app_dir().ok_or_else(|| anyhow!("请先安装 Codex 汉化包"))?;
         stop().await?;
-        crate::sidebar_delete::apply(app.join("resources/app.asar")).await?;
+        crate::codex_inject::apply(app.join("resources/app.asar")).await?;
         let repair = repair_windows_exes(&app)?;
         set_locale_zh_cn()?;
         let (ok, log) = launch_patched_windows(&app).await?;
@@ -542,7 +534,6 @@ pub async fn launch_localized() -> Result<String> {
         stop().await?;
         set_macos_locale(Some("zh-CN")).await?;
         set_locale_zh_cn()?;
-        let app = crate::sidebar_delete::macos_copy(&app).await?;
         let (ok, log) = launch_macos(&app, true).await?;
         if !ok {
             bail!("启动 Codex 失败：{log}");

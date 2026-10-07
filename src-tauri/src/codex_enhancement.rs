@@ -74,6 +74,13 @@ fn registered(doc: &DocumentMut, path: &Path) -> bool {
         .is_some_and(|(left, right)| left == right)
 }
 
+fn plugins_enabled(doc: &DocumentMut) -> bool {
+    doc.get("features")
+        .and_then(|item| item.get("plugins"))
+        .and_then(Item::as_bool)
+        .unwrap_or(false)
+}
+
 pub fn status() -> Result<Status> {
     let doc = read_config()?;
     let cache = cache_path()?;
@@ -86,11 +93,7 @@ pub fn status() -> Result<Status> {
         .and_then(|json| json["models"].as_array().map(Vec::len))
         .unwrap_or(0);
     Ok(Status {
-        plugins_enabled: doc
-            .get("features")
-            .and_then(|item| item.get("plugins"))
-            .and_then(Item::as_bool)
-            .unwrap_or(true),
+        plugins_enabled: plugins_enabled(&doc),
         cache_available: cached_plugins > 0,
         cache_registered: cached_plugins > 0 && registered(&doc, &cache),
         cached_plugins,
@@ -152,5 +155,12 @@ mod tests {
     #[test]
     fn rejects_missing_cache_manifest() {
         assert!(cache_count(Path::new("nonexistent-cache-directory")).is_err());
+    }
+
+    #[test]
+    fn unconfigured_plugins_remain_available_to_enable() {
+        assert!(!plugins_enabled(&DocumentMut::new()));
+        let enabled = "[features]\nplugins = true\n".parse().unwrap();
+        assert!(plugins_enabled(&enabled));
     }
 }
