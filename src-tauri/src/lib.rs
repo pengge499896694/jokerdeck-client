@@ -7,12 +7,17 @@ mod codex_inject;
 mod codex_localization;
 mod codex_sessions;
 mod commands;
+mod computer_tools;
 mod config_writer;
 mod desktop_features;
+mod desktop_locale;
+mod codexplusplus;
 mod diagnostics;
 mod model_probe;
 mod proxy;
+mod provider_manager;
 mod secret_store;
+mod sidebar_delete;
 mod startup;
 mod state;
 mod updater;
@@ -75,6 +80,7 @@ pub fn run() {
             let _ = std::fs::create_dir_all(&app_dir);
 
             let mut store = load_store(&app_dir)?;
+            computer_tools::set_enabled(store.settings.native_computer_tools);
             #[cfg(not(target_os = "android"))]
             match config_writer::recover_stale_proxy(store.settings.proxy_port) {
                 Ok(true) => {
@@ -137,6 +143,11 @@ pub fn run() {
                 configuration_lock: tokio::sync::Mutex::new(()),
             });
             desktop_features::start(app_state.clone())?;
+            let browser_state = app_state.clone();
+            tauri::async_runtime::spawn(async move {
+                let enabled = browser_state.store.read().await.settings.native_browser_compatibility;
+                codexplusplus::configure(enabled).await;
+            });
             app.manage(app_state);
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -208,6 +219,13 @@ pub fn run() {
             commands::set_preferred_host,
             commands::set_auto_fallback,
             commands::set_extensions,
+            commands::native_browser_status,
+            commands::configure_native_browser,
+            commands::computer_tools_status,
+            commands::configure_computer_tools,
+            commands::client_provider_policy,
+            commands::set_client_provider_policy,
+            commands::switch_external_provider,
             commands::detect_clis,
             commands::install_cli,
             commands::download_codex_desktop,

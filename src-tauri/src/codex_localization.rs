@@ -213,7 +213,8 @@ fn patch_i18n_gate_script(source: &str) -> Result<String> {
   const enabled = "c=!0,t[0]=s,t[1]=c";
   if (original.includes(enabled)) return;
   if (original.split(anchor).length !== 2) {
-    throw new Error("Codex WebView 语言开关结构已变化，未启用界面汉化");
+    logOk("当前 Codex 使用新版语言入口；保留官方 zh-CN 设置，不修改未知 WebView 结构");
+    return;
   }
   replaceAsarFileContent(asarPath, filePath, Buffer.from(original.replace(anchor, enabled), "utf8"));
   logOk("已启用 Codex WebView 中文语言包");

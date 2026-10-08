@@ -73,7 +73,7 @@ function (config) {
     bar.querySelector('[data-jd="today-cost"]').textContent = dollars(snapshot?.today_cost);
     const cost = bar.querySelector('[data-jd="session-cost"]');
     cost.textContent = Number.isFinite(snapshot?.session_cost) ? (snapshot.session_cost_complete ? "" : "≈") + dollars(snapshot.session_cost) : "—";
-    cost.title = snapshot?.session_cost_complete ? "本会话已匹配的实际扣费" : "最近100条账单中匹配此会话的实际扣费，可能尚未完整结算";
+    cost.title = snapshot?.session_cost_complete ? "本会话已匹配的实际扣费" : (snapshot?.billing_scope || "已分页加载的账单中匹配此会话的实际扣费，可能尚未完整结算");
     bar.dataset.offline = String(Boolean(snapshot?.error));
     bar.title = snapshot?.error || `账户累计 ${compact(snapshot?.total_tokens)} Token · ${dollars(snapshot?.total_cost)}\n本会话输入 ${compact(usage?.input_tokens)} · 缓存 ${compact(usage?.cached_input_tokens)} · 输出 ${compact(usage?.output_tokens)}\n费用来自中转实际扣费；未匹配账单显示 —`;
   }

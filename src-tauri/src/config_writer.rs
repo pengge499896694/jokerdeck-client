@@ -333,7 +333,9 @@ fn restore_configs_at(claude: &Path, codex: &Path, catalog: &Path) -> Result<Res
     if let Some(current) = read_optional(codex)? {
         let mut doc = String::from_utf8(current)?.parse::<DocumentMut>()?;
         let provider_name = doc.get("model_provider").and_then(Item::as_str);
-        let owned = provider_name == Some(CODEX_PROVIDER);
+        let external = doc.get("model_providers").and_then(|providers| providers.get(CODEX_PROVIDER))
+            .and_then(|provider| provider.get("name")).and_then(Item::as_str) == Some("External provider (no support)");
+        let owned = provider_name == Some(CODEX_PROVIDER) && !external;
         if owned {
             let active_provider = CODEX_PROVIDER;
             let owned_catalog = doc
@@ -623,7 +625,7 @@ fn write_codex_at(
         doc["model_providers"] = Item::Table(Table::new());
     }
     let mut provider = Table::new();
-    provider["name"] = value("jokerdeck 中转");
+    provider["name"] = value("jokerdeck-chatgpt");
     provider["base_url"] = value(base_url_v1);
     provider["wire_api"] = value("responses");
     // A local bearer token works in Desktop too, without inheriting a stale
@@ -862,6 +864,12 @@ mod tests {
         assert!(catalog.exists());
         assert!(!restored.warnings.is_empty());
         doc["model_provider"] = value("jokerdeck");
+        doc["model_providers"]["jokerdeck"]["name"] = value("External provider (no support)");
+        std::fs::write(&codex, doc.to_string()).unwrap();
+        let preserved = std::fs::read(&codex).unwrap();
+        assert!(restore_configs_at(&claude, &codex, &catalog).unwrap().files.is_empty());
+        assert_eq!(std::fs::read(&codex).unwrap(), preserved);
+        doc["model_providers"]["jokerdeck"]["name"] = value("jokerdeck-chatgpt");
         std::fs::write(&codex, doc.to_string()).unwrap();
         restore_configs_at(&claude, &codex, &catalog).unwrap();
         assert!(!codex.exists());

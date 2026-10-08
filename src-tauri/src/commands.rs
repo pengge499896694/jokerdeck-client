@@ -39,6 +39,22 @@ fn e<E: std::fmt::Display>(err: E) -> String {
     err.to_string()
 }
 
+async fn bounded_blocking<T: Send + 'static>(
+    deadline: std::time::Duration,
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> CmdResult<T> {
+    // timeout 无法终止系统调用；限制未完成的探测数量，防止反复刷新耗尽线程。
+    static PROBES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+    let permit = PROBES.try_acquire().map_err(|_| "本地系统检测仍在进行".to_string())?;
+    tokio::time::timeout(deadline, tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        operation()
+    }))
+        .await
+        .map_err(|_| "本地系统操作超时".to_string())?
+        .map_err(e)
+}
+
 async fn require_token(state: &AppState) -> CmdResult<String> {
     state
         .session
@@ -848,7 +864,9 @@ pub async fn apply_config(
             .unwrap_or(0);
         ps.auto_fallback = false;
         ps.extra_headers = if cfg.computer_use {
-            vec![("anthropic-beta".into(), "computer-use-2025-01-24".into())]
+            vec![
+                ("anthropic-beta".into(), "computer-use-2025-01-24".into()),
+            ]
         } else {
             Vec::new()
         };
@@ -1195,6 +1213,7 @@ pub async fn quit_app(
     } else if state.proxy.read().await.running {
         return Err("请先关闭代理并恢复配置".into());
     }
+    crate::codexplusplus::stop().await;
     app.exit(0);
     Ok(())
 }
@@ -1335,6 +1354,85 @@ pub async fn detect_clis() -> CmdResult<cli_manager::CliReport> {
     Ok(cli_manager::detect_all().await)
 }
 
+#[tauri::command]
+pub async fn native_browser_status(state: State<'_, SharedState>) -> CmdResult<serde_json::Value> {
+    let enabled = state.store.read().await.settings.native_browser_compatibility;
+    let connection = crate::codexplusplus::native_browser_connection::check_connection().await;
+    let runtime = crate::codexplusplus::native_browser::read_status();
+    Ok(serde_json::json!({"enabled": enabled, "runtime": runtime, "connection": connection}))
+}
+
+#[tauri::command]
+pub async fn computer_tools_status() -> CmdResult<crate::computer_tools::Status> {
+    tokio::task::spawn_blocking(crate::computer_tools::status).await.map_err(e)?.map_err(e)
+}
+
+#[tauri::command]
+pub async fn configure_computer_tools(state: State<'_, SharedState>, enabled: bool) -> CmdResult<crate::computer_tools::Status> {
+    let _guard = state.configuration_lock.lock().await;
+    if enabled && !cfg!(any(windows, target_os = "macos")) { return Err("仅支持 Windows 和 macOS 桌面系统".into()); }
+    let mut store = state.store.write().await;
+    let mut next = store.clone();
+    next.settings.native_computer_tools = enabled;
+    save_store(&state.app_dir, &next).map_err(e)?;
+    *store = next;
+    crate::computer_tools::set_enabled(enabled);
+    crate::computer_tools::status().map_err(e)
+}
+
+#[tauri::command]
+pub async fn client_provider_policy(state: State<'_, SharedState>) -> CmdResult<serde_json::Value> {
+    let host = pick_host(&state).await;
+    let policy = api::client_provider_policy(&state.http, &host).await.map_err(e)?;
+    let token = require_token(&state).await?;
+    let user = api::get_me(&state.http, &host, &token).await.map_err(e)?;
+    let provider = tokio::task::spawn_blocking(crate::provider_manager::status).await.map_err(e)?.map_err(e)?;
+    Ok(serde_json::json!({"allow_provider_switch": policy["allow_provider_switch"] == true,
+        "eligible": policy["allow_provider_switch"] == true && user.total_recharged > 0.0,
+        "is_admin": user.role == "admin", "provider": provider}))
+}
+
+#[tauri::command]
+pub async fn set_client_provider_policy(state: State<'_, SharedState>, allowed: bool) -> CmdResult<()> {
+    let host = pick_host(&state).await;
+    let token = require_token(&state).await?;
+    // The server's admin middleware is authoritative, regardless of local UI state.
+    api::set_client_provider_policy(&state.http, &host, &token, allowed).await.map_err(e)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn switch_external_provider(state: State<'_, SharedState>, base_url: String, api_key: String, model: String) -> CmdResult<crate::provider_manager::Status> {
+    let _guard = state.configuration_lock.lock().await;
+    let host = pick_host(&state).await;
+    let token = require_token(&state).await?;
+    let policy = api::client_provider_policy(&state.http, &host).await.map_err(e)?;
+    let user = api::get_me(&state.http, &host, &token).await.map_err(e)?;
+    if policy["allow_provider_switch"] != true { return Err("管理员未开放服务商切换".into()); }
+    if user.total_recharged <= 0.0 || !user.total_recharged.is_finite() { return Err("仅充值过的用户可以切换外部服务商".into()); }
+    if crate::codex_desktop::running().await.map_err(e)? {
+        return Err("请先关闭 Codex Desktop，再切换服务商以保留一致的会话状态".into());
+    }
+    tokio::task::spawn_blocking(move || crate::provider_manager::switch(&base_url, &api_key, &model)).await.map_err(e)?.map_err(e)
+}
+
+#[tauri::command]
+pub async fn configure_native_browser(state: State<'_, SharedState>, enabled: bool) -> CmdResult<()> {
+    if enabled && !cfg!(windows) {
+        return Err("Codex++ 原生 Browser 兼容目前仅支持 Windows".into());
+    }
+    let _guard = state.configuration_lock.lock().await;
+    {
+        let mut store = state.store.write().await;
+        let mut next = store.clone();
+        next.settings.native_browser_compatibility = enabled;
+        save_store(&state.app_dir, &next).map_err(e)?;
+        *store = next;
+    }
+    crate::codexplusplus::configure(enabled).await;
+    Ok(())
+}
+
 #[derive(Serialize)]
 pub struct InstallResult {
     pub ok: bool,
@@ -1370,7 +1468,10 @@ pub async fn download_codex_desktop(
 pub async fn restart_codex(state: State<'_, SharedState>) -> CmdResult<InstallResult> {
     let state = state.inner().clone();
     let _guard = state.configuration_lock.lock().await;
-    let (_, localized_active) = crate::codex_localization::status(&state.app_dir);
+    let app_dir = state.app_dir.clone();
+    let (_, localized_active) = bounded_blocking(std::time::Duration::from_secs(5), move || {
+        crate::codex_localization::status(&app_dir)
+    }).await?;
     let (ok, log) = crate::codex_desktop::restart(localized_active).await;
     Ok(InstallResult { ok, log })
 }
@@ -1538,10 +1639,33 @@ pub async fn get_bootstrap(state: State<'_, SharedState>) -> CmdResult<Bootstrap
         let session = state.session.read().await;
         (session.is_some(), session.as_ref().map(|s| s.user.clone()))
     };
-    let store = state.store.read().await;
-    let saved_password = saved_login_password(&store);
+    // 状态刷新不持锁访问 Keychain 或启动系统进程，避免阻塞代理与其他命令。
+    let store = state.store.read().await.clone();
+    let remember_password = store.saved_password.is_some();
+    let saved_password = if logged_in {
+        None
+    } else if store.saved_password.is_some() {
+        store.saved_password.clone()
+    } else {
+        let credentials = store.clone();
+        match bounded_blocking(std::time::Duration::from_secs(3), move || {
+            saved_login_password(&credentials)
+        }).await {
+            Ok(password) => password,
+            Err(error) => {
+                tracing::warn!(%error, "保存的密码读取超时或失败，可手动登录");
+                None
+            }
+        }
+    };
+    let app_dir = state.app_dir.clone();
     let (codex_localization_available, codex_localization_active) =
-        crate::codex_localization::status(&state.app_dir);
+        bounded_blocking(std::time::Duration::from_secs(5), move || {
+            crate::codex_localization::status(&app_dir)
+        }).await.unwrap_or_else(|error| {
+            tracing::warn!(%error, "Codex 本地化状态检测失败");
+            (false, false)
+        });
     Ok(Bootstrap {
         logged_in,
         last_email: store.last_email.clone(),
@@ -1552,7 +1676,7 @@ pub async fn get_bootstrap(state: State<'_, SharedState>) -> CmdResult<Bootstrap
         codex_model: store.settings.codex_model.clone(),
         computer_use: store.settings.computer_use,
         auto_fallback: store.settings.auto_fallback,
-        remember_password: saved_password.is_some(),
+        remember_password: remember_password || saved_password.is_some(),
         saved_password,
         site_url: store.hosts.first().cloned().unwrap_or_default(),
         hosts: store.hosts.clone(),
@@ -1574,20 +1698,28 @@ pub async fn save_login(
         return Err("当前平台暂不支持安全保存密码".into());
     }
     let state = state.inner();
-    let mut store = state.store.write().await;
-    let email = email.trim();
+    let _guard = state.configuration_lock.lock().await;
+    let email = email.trim().to_owned();
     #[cfg(target_os = "macos")]
     {
-        if let Some(previous) = store.last_email.as_deref() {
-            if previous != email || !remember {
-                crate::secret_store::remove_password(previous).map_err(e)?;
+        let previous = state.store.read().await.last_email.clone();
+        let credential_email = email.clone();
+        let credential_password = password.clone();
+        // Keychain 写入可能等待系统授权，但不能占用异步线程或 Store 锁。
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            if let Some(previous) = previous.as_deref() {
+                if previous != credential_email || !remember {
+                    crate::secret_store::remove_password(previous)?;
+                }
             }
-        }
-        if remember {
-            crate::secret_store::save_password(email, &password).map_err(e)?;
-        }
+            if remember {
+                crate::secret_store::save_password(&credential_email, &credential_password)?;
+            }
+            Ok(())
+        }).await.map_err(e)?.map_err(e)?;
     }
-    store.last_email = Some(email.to_string());
+    let mut store = state.store.write().await;
+    store.last_email = Some(email);
     store.saved_password = if remember { Some(password) } else { None };
     save_store(&state.app_dir, &store).map_err(e)
 }
@@ -1627,11 +1759,16 @@ pub async fn open_site(
 #[tauri::command]
 pub async fn forget_password(state: State<'_, SharedState>) -> CmdResult<()> {
     let state = state.inner();
-    let mut store = state.store.write().await;
+    let _guard = state.configuration_lock.lock().await;
     #[cfg(target_os = "macos")]
-    if let Some(email) = store.last_email.as_deref() {
-        crate::secret_store::remove_password(email).map_err(e)?;
+    {
+        let email = state.store.read().await.last_email.clone();
+        if let Some(email) = email {
+            tokio::task::spawn_blocking(move || crate::secret_store::remove_password(&email))
+                .await.map_err(e)?.map_err(e)?;
+        }
     }
+    let mut store = state.store.write().await;
     store.saved_password = None;
     save_store(&state.app_dir, &store).map_err(e)
 }
@@ -1653,12 +1790,19 @@ pub async fn set_site_url(state: State<'_, SharedState>, url: String) -> CmdResu
     let host = parsed.as_str().trim_end_matches('/').to_string();
     let state = state.inner();
     let _guard = state.configuration_lock.lock().await;
+    #[cfg(target_os = "macos")]
+    {
+        let previous = {
+            let store = state.store.read().await;
+            if store.hosts.first() != Some(&host) { store.last_email.clone() } else { None }
+        };
+        if let Some(email) = previous {
+            tokio::task::spawn_blocking(move || crate::secret_store::remove_password(&email))
+                .await.map_err(e)?.map_err(e)?;
+        }
+    }
     let mut store = state.store.write().await;
     if store.hosts.first() != Some(&host) {
-        #[cfg(target_os = "macos")]
-        if let Some(email) = store.last_email.as_deref() {
-            crate::secret_store::remove_password(email).map_err(e)?;
-        }
         store.hosts = vec![host];
         store.group_keys.clear();
         store.refresh_token = None;
@@ -1714,6 +1858,21 @@ mod tests {
             Arc,
         },
     };
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stalled_system_probe_times_out_without_blocking_async_runtime() {
+        let (release, waiting) = std::sync::mpsc::channel::<()>();
+        let started = std::time::Instant::now();
+        let result = bounded_blocking(std::time::Duration::from_millis(30), move || {
+            // 模拟等待 Keychain 授权的系统调用，最长 2 秒防止失败时挂住测试。
+            let _ = waiting.recv_timeout(std::time::Duration::from_secs(2));
+        }).await;
+        let elapsed = started.elapsed();
+        let _ = release.send(());
+        assert!(result.is_err());
+        assert!(elapsed < std::time::Duration::from_secs(1), "系统探测阻塞了异步线程：{elapsed:?}");
+        assert!(bounded_blocking(std::time::Duration::from_secs(1), || 42).await.is_ok());
+    }
 
     #[test]
     fn model_choice_rejects_wrong_group_and_discards_stale_saved_model() {

@@ -267,7 +267,7 @@ fn detect_chatgpt_desktop() -> CliStatus {
     CliStatus::default()
 }
 
-async fn detect_codex_desktop() -> CliStatus {
+pub(crate) async fn detect_codex_desktop() -> CliStatus {
     #[cfg(windows)]
     {
         let (ok, out) = sh("powershell -NoProfile -NonInteractive -Command \"Get-AppxPackage *Codex* | Where-Object { $_.Name -notmatch 'Codex\\+\\+' } | Sort-Object Version -Descending | Select-Object -First 1 | ForEach-Object { $_.InstallLocation }\"").await;

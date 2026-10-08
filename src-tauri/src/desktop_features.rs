@@ -147,6 +147,12 @@ async fn snapshot(
     } else {
         None
     };
+    let external = tokio::task::spawn_blocking(crate::provider_manager::status).await
+        .ok().and_then(Result::ok).is_some_and(|status| status.external);
+    if external {
+        return reply(StatusCode::OK, json!({"theme":theme,"overlay":true,"session_tokens":tokens,
+            "billing_scope":"外部服务商账单不可用；本会话 Token 来自本地记录"}));
+    }
     let (user_id, token) = {
         let session = server.state.session.read().await;
         let Some(session) = session.as_ref() else {
@@ -177,11 +183,10 @@ async fn snapshot(
                 &token,
                 "/api/v1/usage/dashboard/stats"
             ),
-            panel(
+            usage_records(
                 &server.state,
                 &host,
                 &token,
-                "/api/v1/usage?page=1&page_size=100"
             )
         );
         match (stats, records) {
@@ -217,8 +222,31 @@ async fn snapshot(
         StatusCode::OK,
         json!({"theme":theme,"overlay":true,"total_tokens":stats["total_tokens"],"total_cost":stats["total_actual_cost"],
         "today_tokens":stats["today_tokens"],"today_cost":stats["today_actual_cost"],"session_tokens":tokens,
-        "session_cost":if matching.is_empty(){None}else{Some(cost)},"session_cost_complete":complete,"matched_requests":matching.len(),"billing_scope":"最近100条已结算账单"}),
+        "session_cost":if matching.is_empty(){None}else{Some(cost)},"session_cost_complete":complete,"matched_requests":matching.len(),"billing_scope":"已分页加载的结算账单"}),
     )
+}
+/// Load enough usage pages to make per-session totals reliable. The previous
+/// single 100-row request silently reported incomplete or zero session costs.
+async fn usage_records(state: &SharedState, host: &str, token: &str) -> Result<Value> {
+    let mut items = Vec::new();
+    let mut total = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    for page in 1..=20 {
+        let path = format!("/api/v1/usage?page={page}&page_size=100");
+        // Large histories must not keep the overlay waiting beyond its fetch deadline.
+        let value = match tokio::time::timeout_at(deadline, panel(state, host, token, &path)).await {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) if items.is_empty() => return Err(error),
+            Err(_) if items.is_empty() => bail!("账单查询超时"),
+            _ => break,
+        };
+        if total.is_none() { total = value["total"].as_u64(); }
+        let rows = value["items"].as_array().cloned().unwrap_or_default();
+        let count = rows.len();
+        items.extend(rows);
+        if count == 0 || total.is_some_and(|n| items.len() as u64 >= n) || count < 100 { break; }
+    }
+    Ok(json!({"items": items, "total": total}))
 }
 async fn panel(state: &SharedState, host: &str, token: &str, path: &str) -> Result<Value> {
     let response = state

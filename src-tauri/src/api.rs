@@ -175,6 +175,17 @@ pub async fn public_settings(http: &reqwest::Client, host: &str) -> Result<Value
     public_get_json(http, &format!("{host}/api/v1/settings/public")).await
 }
 
+pub async fn client_provider_policy(http: &reqwest::Client, host: &str) -> Result<Value> {
+    public_get_json(http, &format!("{host}/api/v1/settings/client-provider-policy")).await
+}
+
+pub async fn set_client_provider_policy(http: &reqwest::Client, host: &str, token: &str, allowed: bool) -> Result<Value> {
+    let body = http.put(format!("{host}/api/v1/admin/settings/client-provider-policy"))
+        .bearer_auth(token).json(&json!({"allow_provider_switch": allowed}))
+        .timeout(std::time::Duration::from_secs(20)).send().await?.error_for_status()?.json().await?;
+    unwrap_envelope(body)
+}
+
 pub async fn register(
     http: &reqwest::Client,
     host: &str,

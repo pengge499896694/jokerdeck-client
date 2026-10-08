@@ -67,14 +67,23 @@ fn index(data: &[u8]) -> Result<(Value, usize)> {
     Ok((serde_json::from_slice(&data[16..16 + length])?, payload))
 }
 
-fn bundle_path(index: &Value) -> Result<String> {
+fn bundle_path(index: &Value, data: &[u8], payload: usize) -> Result<String> {
     let files = index["files"]["webview"]["files"]["assets"]["files"]
         .as_object()
         .context("缺少 WebView assets")?;
-    let candidates: Vec<_> = files
-        .keys()
-        .filter(|name| name.starts_with("app-initial-") && name.ends_with(".js"))
-        .collect();
+    let mut candidates = Vec::new();
+    // Updates can move the sidebar into app-shared; identify the actual action owner.
+    for (name, entry) in files {
+        if !name.ends_with(".js")
+            || (!name.starts_with("app-initial-") && !name.starts_with("app-shared-"))
+        {
+            continue;
+        }
+        let source = content(data, payload, entry)?;
+        if source.contains("id:`delete-thread`") && source.contains("DeleteThreadDialog") {
+            candidates.push(name);
+        }
+    }
     if candidates.len() != 1 {
         bail!("无法唯一定位 ChatGPT 会话界面 bundle");
     }
@@ -149,7 +158,25 @@ fn patch_csp(original: &str, origin: &str) -> Result<String> {
 }
 fn patched_archive(data: &[u8]) -> Result<Option<Vec<u8>>> {
     let (mut tree, payload_start) = index(data)?;
-    let name = bundle_path(&tree)?;
+    let mut native_main = None;
+    if let Some(files) = tree["files"][".vite"]["files"]["build"]["files"].as_object() {
+        for (name, entry) in files {
+            if !name.starts_with("main-") || !name.ends_with(".js") {
+                continue;
+            }
+            let original = content(data, payload_start, entry)?;
+            if let Some(patched) = crate::computer_tools::patch_source(original)? {
+                if native_main.is_some() {
+                    bail!("无法唯一定位 Computer Use 主进程");
+                }
+                native_main = Some((name.clone(), patched, original.to_owned()));
+            }
+        }
+    }
+    if crate::computer_tools::enabled() && native_main.is_none() {
+        bail!("当前安装包未找到可适配的 Computer Use 主进程，请更新版本适配");
+    }
+    let name = bundle_path(&tree, data, payload_start)?;
     let original = content(
         data,
         payload_start,
@@ -161,7 +188,7 @@ fn patched_archive(data: &[u8]) -> Result<Option<Vec<u8>>> {
         .unwrap_or(original);
     let patched = format!(
         "{}{}",
-        patch_source(base)?,
+        patch_source(&crate::desktop_locale::patch_source(base)?)?,
         crate::desktop_features::runtime_script()
     );
     let html = if let Some(origin) = crate::desktop_features::bridge_origin() {
@@ -175,6 +202,9 @@ fn patched_archive(data: &[u8]) -> Result<Option<Vec<u8>>> {
         None
     };
     if patched == original
+        && native_main
+            .as_ref()
+            .is_none_or(|(_, patched, original)| patched == original)
         && html.as_ref().is_none_or(|text| {
             content(
                 data,
@@ -209,6 +239,13 @@ fn patched_archive(data: &[u8]) -> Result<Option<Vec<u8>>> {
         &mut payload,
         &patched,
     )?;
+    if let Some((name, patched, _)) = native_main {
+        replace_entry(
+            &mut tree["files"][".vite"]["files"]["build"]["files"][&name],
+            &mut payload,
+            &patched,
+        )?;
+    }
     Ok(Some(pack(&tree, &payload)?))
 }
 
@@ -233,9 +270,14 @@ pub(crate) async fn apply(archive: PathBuf) -> Result<bool> {
 
 pub(crate) async fn macos_copy(original: &Path) -> Result<PathBuf> {
     let archive = original.join("Contents/Resources/app.asar");
-    let bytes = fs::read(&archive)?;
-    let (tree, _) = index(&bytes)?;
-    let version = format!("{:x}", Sha256::digest(serde_json::to_vec(&tree)?));
+    // ASAR 可能有数百 MB，Intel Mac 上读盘和哈希不能阻塞异步线程。
+    let version = tokio::task::spawn_blocking(move || -> Result<String> {
+        let bytes = fs::read(&archive)?;
+        let (tree, _) = index(&bytes)?;
+        Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(&tree)?)))
+    })
+    .await??;
+    let archive = original.join("Contents/Resources/app.asar");
     let root = dirs::data_local_dir()
         .context("无法定位应用目录")?
         .join("jokerdeck/desktop-customizations")
@@ -245,7 +287,8 @@ pub(crate) async fn macos_copy(original: &Path) -> Result<PathBuf> {
     fs::create_dir_all(&root)?;
     if ready.is_file() {
         // Refresh only the archive; the original binary and other resources are unchanged.
-        std::fs::copy(&archive, app.join("Contents/Resources/app.asar"))?;
+        let destination = app.join("Contents/Resources/app.asar");
+        tokio::task::spawn_blocking(move || fs::copy(archive, destination)).await??;
     } else {
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(120),
@@ -266,7 +309,11 @@ pub(crate) async fn macos_copy(original: &Path) -> Result<PathBuf> {
     }
     apply(app.join("Contents/Resources/app.asar")).await?;
     // Electron validates the ASAR header separately from macOS code signing.
-    let hash = crate::codex_desktop::asar_header_hash(&app.join("Contents/Resources/app.asar"))?;
+    let signed_archive = app.join("Contents/Resources/app.asar");
+    let hash = tokio::task::spawn_blocking(move || {
+        crate::codex_desktop::asar_header_hash(&signed_archive)
+    })
+    .await??;
     let plist = app.join("Contents/Info.plist");
     let integrity = tokio::process::Command::new("/usr/libexec/PlistBuddy")
         .args(["-c", "Print :ElectronAsarIntegrity"])
@@ -303,8 +350,8 @@ pub(crate) async fn macos_copy(original: &Path) -> Result<PathBuf> {
         tokio::process::Command::new("/usr/bin/codesign")
             .args([
                 "--force",
-                "--deep",
-                "--preserve-metadata=entitlements,requirements,flags,runtime",
+                // Nested native services are unchanged: keep their original signatures.
+                "--preserve-metadata=entitlements,flags,runtime",
                 "--sign",
                 "-",
             ])
@@ -324,12 +371,75 @@ pub(crate) async fn macos_copy(original: &Path) -> Result<PathBuf> {
     Ok(app)
 }
 
+pub(crate) async fn windows_copy() -> Result<PathBuf> {
+    let detected = crate::cli_manager::detect_codex_desktop().await;
+    let path = PathBuf::from(detected.path.context("未找到官方 Codex Desktop 安装目录")?);
+    let base = if path.is_file() {
+        path.parent().context("安装目录无效")?.to_owned()
+    } else {
+        path
+    };
+    let source = [base.clone(), base.join("app")]
+        .into_iter()
+        .find(|root| root.join("resources/app.asar").is_file())
+        .context("官方 Codex 安装目录缺少 app.asar")?;
+    let app = tokio::task::spawn_blocking(move || -> Result<PathBuf> {
+        let hash = crate::codex_desktop::asar_header_hash(&source.join("resources/app.asar"))?;
+        let root = dirs::data_local_dir()
+            .context("无法定位本地应用目录")?
+            .join("jokerdeck/desktop-customizations")
+            .join(&hash[..16]);
+        let app = root.join("app");
+        let ready = root.join("copy-ready-v1");
+        if !ready.is_file() {
+            copy_tree(&source, &app, 0)?;
+            fs::write(ready, b"v1")?;
+        }
+        Ok(app)
+    })
+    .await??;
+    apply(app.join("resources/app.asar")).await?;
+    let repair_app = app.clone();
+    tokio::task::spawn_blocking(move || crate::codex_desktop::repair_windows_exes(&repair_app))
+        .await??;
+    Ok(app)
+}
+
+fn copy_tree(source: &Path, destination: &Path, depth: usize) -> Result<()> {
+    if depth > 32 {
+        bail!("Codex 安装目录层级异常");
+    }
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() {
+            bail!("安装目录包含链接，未创建修改副本");
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 {
+                bail!("安装目录包含 reparse point，未创建修改副本");
+            }
+        }
+        let target = destination.join(entry.file_name());
+        if metadata.is_dir() {
+            copy_tree(&entry.path(), &target, depth + 1)?;
+        } else if metadata.is_file() {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     fn source() -> String {
         [
             "id:`delete-thread`;DeleteThreadDialog;",
+            "c=s?.get(`enable_i18n`,!1),t[0]=s,t[1]=c",
             "primaryAction:n,archive:t!=null&&(at||ge)?dt:t,getMenuItems:",
             "onMenuOpenChange:c,pinAction:l}=e",
             "let m;t[6]!==f||t[7]!==p?(m=[...f,...p],t[6]=f,t[7]=p,t[8]=m):m=t[8];",
@@ -350,13 +460,24 @@ mod tests {
             .unwrap()
             .expect("fresh source bundle required");
         let (tree, start) = index(&result).unwrap();
-        let name = bundle_path(&tree).unwrap();
+        let name = bundle_path(&tree, &result, start).unwrap();
         let entry = &tree["files"]["webview"]["files"]["assets"]["files"][&name];
         let offset = entry["offset"].as_str().unwrap().parse::<usize>().unwrap();
         let length = entry["size"].as_u64().unwrap() as usize;
         let output =
             std::env::var_os("JOKERDECK_SIDEBAR_TEST_OUTPUT").expect("output path required");
         fs::write(output, &result[start + offset..start + offset + length]).unwrap();
+        if let Some(files) = tree["files"][".vite"]["files"]["build"]["files"].as_object() {
+            for (name, entry) in files {
+                if name.starts_with("main-") && name.ends_with(".js") {
+                    let source = content(&result, start, entry).unwrap();
+                    assert!(source.contains("/*jokerdeck-native-cua-v1*/"));
+                    if let Some(output) = std::env::var_os("JOKERDECK_CUA_TEST_OUTPUT") {
+                        fs::write(output, source).unwrap();
+                    }
+                }
+            }
+        }
         assert!(patched_archive(&result).unwrap().is_none());
     }
     #[test]

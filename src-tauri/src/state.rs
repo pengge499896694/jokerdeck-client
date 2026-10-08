@@ -37,6 +37,10 @@ pub struct Settings {
     /// Inject the anthropic-beta header for opt-in features (computer-use).
     #[serde(default)]
     pub computer_use: bool,
+    #[serde(default)]
+    pub native_browser_compatibility: bool,
+    #[serde(default)]
+    pub native_computer_tools: bool,
     pub update_manifest_url: Option<String>,
     #[serde(default = "native_theme")]
     pub codex_theme: String,
@@ -63,6 +67,8 @@ impl Default for Settings {
             claude_model: None,
             codex_model: None,
             computer_use: false,
+            native_browser_compatibility: false,
+            native_computer_tools: false,
             update_manifest_url: None,
             codex_theme: native_theme(),
             usage_overlay: true,

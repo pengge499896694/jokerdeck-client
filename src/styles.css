@@ -27,6 +27,7 @@ button { color: inherit; }
 .close:hover { background: #ef4444; color: white; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: #11182799; }
 .dialog { width: min(440px, 100%); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; padding: 24px; background: white; border-radius: 8px; box-shadow: 0 16px 48px #11182733; }
+.restart-dialog { width: min(620px, 100%); overflow-y: auto; }
 .dialog p { line-height: 1.7; color: #4b5563; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dialog .row { justify-content: flex-end; margin-top: 20px; }
 .update-notes { max-height: min(360px, 42dvh); margin: 16px 0 0; padding-right: 8px; white-space: pre-wrap; overflow: auto; overflow-wrap: anywhere; }
@@ -70,7 +71,7 @@ button { color: inherit; }
 .login-host .line-status { margin: 8px 0 0; }
 .sidebar-brand { display: flex; gap: 10px; align-items: center; padding: 0 10px 26px; }
 .sidebar-brand img { width: 36px; height: 36px; object-fit: contain; border-radius: 8px; }
-.sidebar-brand strong { font-size: 18px; }
+.sidebar-brand strong { font-size: 14px; }
 .sidebar-brand small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
 .nav-label { color: #9ca3af; padding: 0 12px 10px; font-size: 11px; }
 .nav-link { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 42px; padding: 10px 12px; margin-bottom: 5px; border: 0; border-radius: 6px; background: none; color: #4b5563; text-align: left; }

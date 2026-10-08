@@ -19,7 +19,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const INTEGRITY_MARKER: &[u8] = b"app.asar\",\"alg\":\"SHA256\",\"value\":\"";
 
 /// 计算 app.asar 头部字符串的 SHA-256（小写十六进制），与 Electron 的校验口径一致。
-fn asar_header_hash(asar: &Path) -> Result<String> {
+pub(crate) fn asar_header_hash(asar: &Path) -> Result<String> {
     let data = std::fs::read(asar).with_context(|| format!("无法读取 {}", asar.display()))?;
     if data.len() < 16 {
         bail!("app.asar 头部过短");
@@ -84,7 +84,7 @@ fn patch_exe_integrity(exe: &Path, want_hash: &str) -> Result<usize> {
 }
 
 /// 修复汉化副本中所有内嵌完整性标记的可执行文件（关键是 `ChatGPT.exe`）。
-fn repair_windows_exes(app_dir: &Path) -> Result<String> {
+pub(crate) fn repair_windows_exes(app_dir: &Path) -> Result<String> {
     let want = asar_header_hash(&app_dir.join("resources").join("app.asar"))?;
     let mut touched: Vec<&str> = Vec::new();
     for name in ["ChatGPT.exe", "Codex.exe", "codex.exe"] {
@@ -338,6 +338,7 @@ Get-Process -Name ChatGPT, Codex, codex-helper, CodexHelper -ErrorAction Silentl
         (
             $_.Path -like '*OpenAI.Codex*' -or
             $_.Path -like '*zh-cn-patched*' -or
+            $_.Path -like '*\jokerdeck\desktop-customizations\*' -or
             $_.Path -like '*\Programs\Codex\*' -or
             $_.Path -like '*\Codex\*'
         )
@@ -438,6 +439,7 @@ throw '汉化版 Codex 未能启动；请重新安装汉化包或检查 Codex �
     let envs = [
         ("CODEX_LAUNCH_EXE", exe.to_string_lossy().into_owned()),
         ("CODEX_LAUNCH_DIR", app_dir.to_string_lossy().into_owned()),
+        ("JOKERDECK_ENABLE_NATIVE_CUA", if crate::computer_tools::enabled() { "1" } else { "0" }.to_owned()),
     ];
     powershell(SCRIPT, &envs, 30).await
 }
@@ -478,6 +480,7 @@ async fn launch_macos(app_bundle: &Path, localized: bool) -> Result<(bool, Strin
     let mut command = tokio::process::Command::new(&executable);
     command
         .current_dir(app_bundle.join("Contents/Resources"))
+        .env("JOKERDECK_ENABLE_NATIVE_CUA", if crate::computer_tools::enabled() { "1" } else { "0" })
         .env(
             "LANG",
             if localized {
@@ -516,10 +519,21 @@ async fn launch_macos(app_bundle: &Path, localized: bool) -> Result<(bool, Strin
 
 /// 启动「汉化版」Codex：关闭现有进程 → 校正完整性 → 写入 zh-CN → 启动补丁副本。
 /// 仅用于显式点击「启动汉化版」按钮。
+fn localization_launch_target(original: PathBuf, enhanced: Result<PathBuf>) -> (PathBuf, String) {
+    match enhanced {
+        Ok(app) => (app, String::new()),
+        Err(error) => {
+            tracing::warn!(%error, "macOS 可选增强失败，使用原应用的中文启动链路");
+            (original, format!("可选增强未启用：{error}；此次会话删除、统计皮肤及 Computer Use 增强不生效。"))
+        }
+    }
+}
+
 pub async fn launch_localized() -> Result<String> {
     if cfg!(windows) {
         let app = patched_app_dir().ok_or_else(|| anyhow!("请先安装 Codex 汉化包"))?;
         stop().await?;
+        crate::sidebar_delete::apply(app.join("resources/app.asar")).await?;
         crate::codex_inject::apply(app.join("resources/app.asar")).await?;
         let repair = repair_windows_exes(&app)?;
         set_locale_zh_cn()?;
@@ -534,11 +548,13 @@ pub async fn launch_localized() -> Result<String> {
         stop().await?;
         set_macos_locale(Some("zh-CN")).await?;
         set_locale_zh_cn()?;
+        let enhanced = crate::sidebar_delete::macos_copy(&app).await;
+        let (app, warning) = localization_launch_target(app, enhanced);
         let (ok, log) = launch_macos(&app, true).await?;
         if !ok {
             bail!("启动 Codex 失败：{log}");
         }
-        Ok("已启动 Codex（简体中文）。".into())
+        Ok(format!("已启动 Codex（简体中文）。{warning}"))
     } else {
         bail!("当前平台暂不支持 Codex 桌面端汉化")
     }
@@ -552,13 +568,14 @@ pub async fn launch_english() -> Result<String> {
     }
     clear_locale_zh_cn()?;
     let launched = if cfg!(windows) {
-        match launch_store_windows().await {
-            Ok((true, log)) => Ok((true, log)),
-            _ => launch_installed_windows().await,
-        }
+        let enhanced = crate::sidebar_delete::windows_copy().await?;
+        launch_patched_windows(&enhanced).await
     } else if cfg!(target_os = "macos") {
         match macos_codex_app() {
-            Some(app) => launch_macos(&app, false).await,
+            Some(app) => {
+                let enhanced = crate::sidebar_delete::macos_copy(&app).await?;
+                launch_macos(&enhanced, false).await
+            },
             None => run_tool("open", &["-a", "Codex"]).await,
         }
     } else {
@@ -614,6 +631,19 @@ mod macos_detection_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_patch_failure_preserves_localized_launch() {
+        let original = PathBuf::from("/Applications/Codex.app");
+        let (target, warning) = localization_launch_target(original.clone(), Err(anyhow!("bundle structure changed")));
+        assert_eq!(target, original);
+        assert!(warning.contains("bundle structure changed"));
+        assert!(warning.contains("不生效"));
+        let enhanced = PathBuf::from("/managed/Codex.app");
+        let (target, warning) = localization_launch_target(original, Ok(enhanced.clone()));
+        assert_eq!(target, enhanced);
+        assert!(warning.is_empty());
+    }
 
     #[test]
     fn rewrites_integrity_hash_in_place_and_backs_up() {

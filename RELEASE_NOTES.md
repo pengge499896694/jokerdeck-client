@@ -1,3 +1,14 @@
+v0.2.0
+
+- 独立服务商管理、电脑与浏览器入口，默认进入增强管理页，品牌统一为 jokerdeck-chatgpt。
+- 服务商默认锁定，服务端管理员开放后允许充值用户切换；外部服务商不提供售后。
+- 切换保留 provider ID、CODEX_HOME、auth.json 与历史会话；外部费用不混入中转账单。
+- 原生 Computer Use / Browser 使用应用插件和 native pipe；保留原生审批、系统授权及账户访问校验。
+- 会话删除复用原生确认，统计与皮肤覆盖英文及中文定制副本。
+- 启用自带语言包入口，修复 macOS 中文设置被 i18n 门控忽略；增强失败不会阻断原应用中文启动。
+- Intel Mac 状态探测移出异步运行线程与 Store 锁，增加探测超时和并发上限。
+- Windows 本地编译与安装包校验；macOS Intel/ARM 构建及操作验收需要 Apple 环境。
+
 v0.1.34
 
 - 在工具与修复页新增 Computer use / Browser 的本地代理 Beta 请求头开关，可即时启用并持久化。

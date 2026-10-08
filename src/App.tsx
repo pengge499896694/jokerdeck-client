@@ -14,8 +14,12 @@ import { api, isPreview, type Bootstrap, type UserInfo, type ProxyStatus, type H
   type CodexSession, type CodexSessionDetail, type DesktopFeatureStatus, type ProviderSyncResult, type CodexEnhancementStatus, type UpdateProgress } from "./api";
 
 type SiteTab = typeof allSiteTabs[number]["id"];
-type Tab = "setup" | "tools" | "sessions" | "enhance" | "account" | SiteTab;
+type Tab = "setup" | "tools" | "computer" | "providers" | "sessions" | "enhance" | "account" | SiteTab;
 type AuthPage = "register" | "forgot-password" | "reset-password";
+type CodexPreset = {
+  claude: boolean; codex: boolean; groupId?: number; claudeModel?: string; codexModel?: string;
+  localization: boolean; computerUse: boolean; browser: boolean;
+};
 const logo = new URL("../icon-source.png", import.meta.url).href;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const formatBytes = (value: number) => {
@@ -24,6 +28,8 @@ const formatBytes = (value: number) => {
 };
 const tabs = [
   { id: "setup", title: "控制台", icon: LayoutDashboard },
+  { id: "providers", title: "服务商管理", icon: Globe },
+  { id: "computer", title: "电脑与浏览器", icon: Monitor },
   { id: "tools", title: "工具与修复", icon: Stethoscope },
   { id: "sessions", title: "会话管理", icon: History },
   { id: "enhance", title: "Codex 增强", icon: Sparkles },
@@ -76,7 +82,7 @@ function TitleBar({ flash, onClose }: { flash: (text: string) => void; onClose: 
     .then(() => getCurrentWindow().isMaximized()).then(setMaximized).catch((err) => flash(message(err)));
   return <header className="titlebar" onMouseDown={drag} onDoubleClick={isPreview ? undefined :
     (event) => { if (!(event.target as HTMLElement).closest("button")) toggleMaximize(); }}>
-    <span className="titlebar-brand"><img src={logo} alt="" />jokerdeck</span>
+    <span className="titlebar-brand"><img src={logo} alt="" />jokerdeck-chatgpt</span>
     <span className="titlebar-status">{isPreview ? "界面预览" : "客户端"}</span>
     {!isPreview && <div className="window-controls">
       <button className="icon-button window-control" title="最小化到托盘" aria-label="最小化到托盘"
@@ -97,7 +103,7 @@ export default function App() {
   const [authPage, setAuthPage] = useState<AuthPage | null>(null);
   const [resetLink, setResetLink] = useState("");
   const [resetCredentials, setResetCredentials] = useState<{ email: string; token: string }>();
-  const [tab, setTab] = useState<Tab>("setup");
+  const [tab, setTab] = useState<Tab>("enhance");
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [closePrompt, setClosePrompt] = useState(false);
@@ -159,6 +165,29 @@ export default function App() {
       setLocaleProgress((current) => ({ percent: current?.percent ?? 0, detail: `操作失败：${message(err)}` }));
       flash(message(err));
     } finally { off?.(); setRestarting(false); }
+  };
+  const runCodexPreset = async (preset: CodexPreset) => {
+    if (restarting) return;
+    setRestarting(true);
+    setLocaleProgress({ percent: 3, detail: "正在应用 Codex 增强设置" });
+    try {
+      await api.applyConfig(preset.claude, preset.codex, preset.groupId, preset.claudeModel || undefined, preset.codexModel || undefined);
+      await api.setExtensions(preset.computerUse);
+      await api.configureComputerTools(preset.computerUse);
+      await api.configureNativeBrowser(preset.browser);
+      if (preset.localization) await api.codexLocalization("launch");
+      else {
+        await api.codexLocalization("uninstall").catch(() => {});
+        const result = await api.restartCodex();
+        if (!result.ok) throw new Error(result.log);
+      }
+      setLocaleProgress({ percent: 100, detail: `${desktopName} 已按习惯启动` });
+      flash("Codex 已按选择完成配置并重启");
+      await refreshBoot();
+    } catch (err) {
+      setLocaleProgress((current) => ({ percent: current?.percent ?? 0, detail: `操作失败：${message(err)}` }));
+      flash(message(err));
+    } finally { setRestarting(false); }
   };
   const refreshBoot = async () => {
     const result = await api.bootstrap();
@@ -272,7 +301,7 @@ export default function App() {
       <Login boot={boot} onLogin={loggedIn} onAuthPage={setAuthPage} initialError={error} /> :
       <div className="workspace">
         <aside className="sidebar">
-          <div className="sidebar-brand"><img src={logo} alt="" /><div><strong>jokerdeck</strong><small>中转服务</small></div></div>
+          <div className="sidebar-brand"><img src={logo} alt="" /><div><strong>jokerdeck-chatgpt</strong><small>定制工具</small></div></div>
           <span className="nav-label">工作空间</span>
           <nav>{tabs.map(({ id, title, icon: Icon }) => <button key={id} id={id === "tools" ? "tools-nav" : undefined}
             className={`nav-link ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
@@ -303,11 +332,6 @@ export default function App() {
           <div className="page-header"><div><span className="breadcrumb">工作空间 / {tabs.find((item) => item.id === tab)?.title}</span>
             <h1>{tabs.find((item) => item.id === tab)?.title}</h1></div>
             <div className="row wrap">
-              {tab === "setup" && <button className="btn" disabled={restarting || boot?.desktop_supported === false}
-                onClick={() => void restartCodex()}><RefreshCw size={16} className={restarting ? "spin" : ""} />
-                {restarting ? "处理中..." : `一键重启汉化 ${desktopName}`}</button>}
-              {tab === "setup" && <button className="btn" disabled={restarting || boot?.desktop_supported === false}
-                onClick={() => setRestoreLocaleConfirm(true)}><RotateCcw size={16} />恢复英文版本</button>}
               <button className="btn" onClick={() => setTab("store")}><Store size={16} />店铺销售</button>
             </div></div>
           {tab === "setup" && localeProgress && <div className="section localization-progress" aria-live="polite">
@@ -319,9 +343,11 @@ export default function App() {
             <Setup user={user} setUser={setUser} boot={boot} refreshBoot={refreshBoot} flash={flash}
               goTools={() => setTab("tools")} />}
           {tab === "tools" && <Tools boot={boot} flash={flash} refreshBoot={refreshBoot} goSetup={() => setTab("setup")} />}
+          {tab === "computer" && <Tools key="computer" mode="computer" boot={boot} flash={flash} refreshBoot={refreshBoot} goSetup={() => setTab("setup")} />}
+          {tab === "providers" && <ProviderControls flash={flash} goSetup={() => setTab("setup")} />}
           {tab === "sessions" && <Sessions flash={flash} />}
           {tab === "enhance" && <CodexEnhance boot={boot} flash={flash} goTools={() => setTab("tools")}
-            goSessions={() => setTab("sessions")} />}
+            goSessions={() => setTab("sessions")} restarting={restarting} onRestart={runCodexPreset} />}
           {tab === "account" && <Account user={user} version={boot?.version} flash={flash} onUpdate={setUpdate} />}
           </>}
         </main>
@@ -961,8 +987,9 @@ function Sessions({ flash }: { flash: (text: string) => void }) {
   </section>;
 }
 
-function CodexEnhance({ boot, flash, goTools, goSessions }: {
+function CodexEnhance({ boot, flash, goTools, goSessions, restarting, onRestart }: {
   boot: Bootstrap | null; flash: (text: string) => void; goTools: () => void; goSessions: () => void;
+  restarting: boolean; onRestart: (preset: CodexPreset) => Promise<void>;
 }) {
   const [busy, setBusy] = useState("");
   const [status, setStatus] = useState<CodexEnhancementStatus | null>(null);
@@ -971,6 +998,11 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
   const [featureError, setFeatureError] = useState("");
   const [syncLog, setSyncLog] = useState("");
   const [confirmation, setConfirmation] = useState<{ action: "sync" | "restore"; backup?: string } | null>(null);
+  const [restartOpen, setRestartOpen] = useState(false);
+  const [preset, setPreset] = useState<CodexPreset>({ claude: true, codex: true, localization: true, computerUse: false, browser: false });
+  const [groups, setGroups] = useState<PlazaGroup[]>([]);
+  const [groupModels, setGroupModels] = useState<GroupModels | null>(null);
+  const [rememberPreset, setRememberPreset] = useState(false);
   const nodeReady = Boolean(features?.node_version);
   const themes = [
     { id: "native", name: "原生", colors: ["#f5f5f5", "#202020", "#8b8b8b"] },
@@ -998,7 +1030,39 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
   };
   useEffect(() => {
     api.desktopFeatureStatus().then(setFeatures).catch((err) => setFeatureError(message(err)));
+    api.plaza().then(setGroups).catch(() => {});
+    try {
+      const saved = localStorage.getItem("jokerdeck.codex-restart-preset.v1");
+      if (saved) setPreset(JSON.parse(saved));
+    } catch {}
   }, []);
+  const openRestart = async () => {
+    if (restarting) return;
+    try {
+      const saved = localStorage.getItem("jokerdeck.codex-restart-preset.v1");
+      if (saved) {
+        const value = JSON.parse(saved) as Partial<CodexPreset>;
+        if (typeof value.claude === "boolean" && typeof value.codex === "boolean" &&
+          typeof value.localization === "boolean" && typeof value.computerUse === "boolean" &&
+          typeof value.browser === "boolean") {
+          await onRestart(value as CodexPreset);
+          return;
+        }
+      }
+    } catch {}
+    setRestartOpen(true);
+  };
+  const submitRestart = async () => {
+    if (!preset.claude && !preset.codex) { setFeatureError("至少选择 Claude Code 或 Codex"); return; }
+    if (rememberPreset) localStorage.setItem("jokerdeck.codex-restart-preset.v1", JSON.stringify(preset));
+    setRestartOpen(false);
+    await onRestart(preset);
+  };
+  const selectedGroup = groups.find((item) => item.id === preset.groupId);
+  const loadPresetModels = async (id: number) => {
+    setPreset((current) => ({ ...current, groupId: id, claudeModel: "", codexModel: "" }));
+    try { setGroupModels(await api.groupModels(id)); } catch (err) { setFeatureError(message(err)); }
+  };
   const refresh = async () => {
     try { setStatus(await api.codexEnhancementStatus()); }
     catch (err) { flash(message(err)); }
@@ -1011,6 +1075,13 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
     finally { setBusy(""); }
   };
   return <>
+    <section className="section">
+      <div className="section-header"><div><h2>一键重启 Codex</h2><p className="subtext">首次选择一次，之后可直接按习惯启动。</p></div>
+        <button className="btn primary" disabled={restarting || boot?.desktop_supported === false} onClick={() => void openRestart()}>
+          <RefreshCw size={16} className={restarting ? "spin" : ""} />{restarting ? "处理中..." : "一键重启 Codex"}</button>
+      </div>
+      {boot?.desktop_supported === false && <div className="alert warning">当前系统未检测到可适配的 Codex Desktop。</div>}
+    </section>
     <section className="section"><div className="section-header"><h2>Codex 换肤</h2><span className="tag">Windows 汉化副本</span></div>
       <div className="theme-grid">{themes.map((theme) => <button className={`theme-card ${features?.theme === theme.id ? "selected" : ""}`} key={theme.id}
         disabled={!!busy || !features || navigator.platform.toLowerCase().includes("mac")}
@@ -1089,6 +1160,25 @@ function CodexEnhance({ boot, flash, goTools, goSessions }: {
     <section className="section"><div className="section-header"><h2>会话</h2><History size={18} /></div>
       <button className="btn" onClick={goSessions}><History size={16} />管理本地会话</button>
     </section>
+    {restartOpen && <div className="dialog-backdrop"><div className="dialog restart-dialog" role="dialog" aria-modal="true" aria-labelledby="restart-title">
+      <h2 id="restart-title">配置并重启 Codex</h2>
+      <p>选择本次要启用的能力。勾选“保留习惯”后，下次点击将直接执行。</p>
+      <div className="field"><label htmlFor="restart-group">分组</label><select id="restart-group" className="input" value={preset.groupId ?? ""} onChange={(event) => void loadPresetModels(Number(event.target.value))}>
+        <option value="">选择分组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></div>
+      {selectedGroup && <div className="model-grid">
+        <div className="field"><label htmlFor="restart-claude-model">Claude 模型</label><select id="restart-claude-model" className="input" value={preset.claudeModel ?? ""} onChange={(event) => setPreset((p) => ({ ...p, claudeModel: event.target.value }))}>{(groupModels?.claude_models ?? []).map((model) => <option key={model}>{model}</option>)}</select></div>
+        <div className="field"><label htmlFor="restart-codex-model">GPT / Codex 模型</label><select id="restart-codex-model" className="input" value={preset.codexModel ?? ""} onChange={(event) => setPreset((p) => ({ ...p, codexModel: event.target.value }))}>{(groupModels?.codex_models ?? []).map((model) => <option key={model}>{model}</option>)}</select></div>
+      </div>}
+      <div className="tool-options restart-options">
+        <label className="tool-choice"><input type="checkbox" checked={preset.claude} onChange={(e) => setPreset((p) => ({ ...p, claude: e.target.checked }))} /><span><strong>启用 Claude Code</strong><small>写入 Claude Code 配置</small></span></label>
+        <label className="tool-choice"><input type="checkbox" checked={preset.codex} onChange={(e) => setPreset((p) => ({ ...p, codex: e.target.checked }))} /><span><strong>启用 GPT / Codex</strong><small>写入 Codex 模型与分组</small></span></label>
+        <label className="tool-choice"><input type="checkbox" checked={preset.localization} onChange={(e) => setPreset((p) => ({ ...p, localization: e.target.checked }))} /><span><strong>中文界面</strong><small>新版客户端不兼容时保留官方语言设置</small></span></label>
+        <label className="tool-choice"><input type="checkbox" checked={preset.computerUse} onChange={(e) => setPreset((p) => ({ ...p, computerUse: e.target.checked }))} /><span><strong>强开 Computer Use</strong><small>同时启用本地电脑与浏览器能力</small></span></label>
+        <label className="tool-choice"><input type="checkbox" checked={preset.browser} onChange={(e) => setPreset((p) => ({ ...p, browser: e.target.checked }))} /><span><strong>Browser 兼容</strong><small>启用 Codex++ 原生 Browser 适配</small></span></label>
+      </div>
+      <label className="feature-toggle"><input type="checkbox" checked={rememberPreset} onChange={(e) => setRememberPreset(e.target.checked)} /><span>保留习惯，下次直接一键重启</span></label>
+      <div className="row"><button className="btn" onClick={() => setRestartOpen(false)}>取消</button><button className="btn primary" onClick={() => void submitRestart()}>保存并重启</button></div>
+    </div></div>}
   </>;
 }
 
@@ -1153,7 +1243,52 @@ function BeginnerGuide({ step, setStep, onTools, onClose }: {
   </div>;
 }
 
-function Tools({ boot, flash, refreshBoot, goSetup }: {
+function ProviderControls({ flash, goSetup }: { flash: (text: string) => void; goSetup: () => void }) {
+  const [policy, setPolicy] = useState<Awaited<ReturnType<typeof api.clientProviderPolicy>> | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState("");
+  const refresh = async () => {
+    try { setPolicy(await api.clientProviderPolicy()); setError(""); }
+    catch (err) { setPolicy(null); setError(message(err)); }
+  };
+  useEffect(() => { if (!isPreview) void refresh(); }, []);
+  const changePolicy = async () => {
+    if (!policy || busy) return;
+    setBusy(true);
+    try { await api.setClientProviderPolicy(!policy.allow_provider_switch); await refresh(); }
+    catch (err) { flash(message(err)); }
+    finally { setBusy(false); }
+  };
+  const switchProvider = async () => {
+    if (!policy?.eligible || busy) return;
+    setBusy(true);
+    try {
+      await api.switchExternalProvider(baseUrl.trim(), apiKey, model.trim());
+      setApiKey(""); await refresh();
+      flash("服务商已切换，会话存储保持原路径；重新启动 Codex 生效。外部服务商不提供售后。");
+    } catch (err) { flash(message(err)); }
+    finally { setBusy(false); }
+  };
+  return <section className="section"><div className="section-header"><h2>服务商管理</h2><span className="tag">{policy?.provider.external ? "外部服务商" : "jokerdeck-chatgpt"}</span></div>
+    {error && <p className="subtext">权限检测失败，外部服务商切换已锁定：{error}</p>}
+    {policy?.is_admin && <button className="btn" disabled={busy} onClick={() => void changePolicy()}>{policy.allow_provider_switch ? "禁止用户更换服务商" : "允许充值用户更换服务商"}</button>}
+    <p className="subtext">{policy?.eligible ? "管理员已开放服务商切换。" : "默认使用 jokerdeck-chatgpt；管理员开放后，充值过的用户可更换服务商。"}外部服务商不提供售后。</p>
+    {policy?.eligible && <div>
+      <div className="field"><label htmlFor="provider-url">Responses API Base URL</label><input id="provider-url" className="input" value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://provider.example/v1" autoComplete="off" /></div>
+      <div className="field"><label htmlFor="provider-api-key">API Key</label><input id="provider-api-key" className="input" type="password" value={apiKey} onChange={event => setApiKey(event.target.value)} autoComplete="new-password" /></div>
+      <div className="field"><label htmlFor="provider-model">Model</label><input id="provider-model" className="input" value={model} onChange={event => setModel(event.target.value)} placeholder="服务商支持的模型 ID" /></div>
+      <button className="btn primary" disabled={busy || !baseUrl.trim() || !apiKey.trim() || !model.trim()} onClick={() => void switchProvider()}>{busy ? "处理中..." : "切换外部服务商"}</button>
+    </div>}
+    <div className="row wrap"><button className="btn" disabled={busy} onClick={() => void refresh()}>刷新权限</button><button className="btn" disabled={busy} onClick={goSetup}>返回配置页使用默认服务商</button></div>
+    <small className="subtext">切换前关闭 Codex 和正在运行的 Codex CLI；配置使用同一 provider ID 和会话目录，不移动、不删除聊天记录。默认服务商通过配置页“一键应用配置”恢复。</small>
+  </section>;
+}
+
+function Tools({ boot, flash, refreshBoot, goSetup, mode = "maintenance" }: {
+  mode?: "maintenance" | "computer";
   boot: Bootstrap | null;
   flash: (text: string) => void;
   refreshBoot: () => Promise<Bootstrap>;
@@ -1168,6 +1303,32 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
   const [desktopRunning, setDesktopRunning] = useState<boolean | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
   const [extensionBusy, setExtensionBusy] = useState(false);
+  const [nativeBrowser, setNativeBrowser] = useState<Awaited<ReturnType<typeof api.nativeBrowserStatus>> | null>(null);
+  const [nativeBrowserBusy, setNativeBrowserBusy] = useState(false);
+  const [computerTools, setComputerTools] = useState<Awaited<ReturnType<typeof api.computerToolsStatus>> | null>(null);
+  const [computerToolsBusy, setComputerToolsBusy] = useState(false);
+  useEffect(() => { if (!isPreview) api.computerToolsStatus().then(setComputerTools).catch(err => flash(message(err))); }, []);
+  const toggleComputerTools = async () => {
+    if (!computerTools || computerToolsBusy) return;
+    setComputerToolsBusy(true);
+    try { setComputerTools(await api.configureComputerTools(!computerTools.configured)); flash("设置已保存，请通过客户端重启 Codex 生效"); }
+    catch (err) { flash(message(err)); }
+    finally { setComputerToolsBusy(false); }
+  };
+  const refreshNativeBrowser = async () => {
+    try { setNativeBrowser(await api.nativeBrowserStatus()); }
+    catch (err) { flash(message(err)); }
+  };
+  useEffect(() => { if (!isPreview) void refreshNativeBrowser(); }, []);
+  const toggleNativeBrowser = async () => {
+    if (!nativeBrowser || nativeBrowserBusy) return;
+    setNativeBrowserBusy(true);
+    try {
+      await api.configureNativeBrowser(!nativeBrowser.enabled);
+      await refreshNativeBrowser();
+    } catch (err) { flash(message(err)); }
+    finally { setNativeBrowserBusy(false); }
+  };
   const refreshDesktop = async () => {
     if (isPreview) return;
     try { setDesktopRunning(await api.codexDesktopRunning()); }
@@ -1239,7 +1400,7 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
     try {
       await api.setExtensions(!boot.computer_use);
       await refreshBoot();
-      flash(boot.computer_use ? "Computer use / Browser 能力已关闭" : "Computer use / Browser 能力已解锁；请重启正在运行的工具");
+      flash(boot.computer_use ? "Anthropic Beta 标记已关闭" : "Anthropic Beta 标记已启用；此标记不代表本地工具已可用");
     } catch (err) { flash(message(err)); }
     finally { setExtensionBusy(false); }
   };
@@ -1273,16 +1434,31 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
           <X size={16} />关闭</button>
       </div>
     </section>
-    <section className="section extension-section"><div className="section-header"><h2>Computer use / Browser</h2><span className={`tag ${boot?.computer_use ? "success" : "warning"}`}>{boot?.computer_use ? "已解锁" : "未启用"}</span></div>
-      <p className="subtext">为本地代理请求添加 Anthropic computer-use Beta 标记，使支持该能力的模型可以使用电脑操作和浏览器工具。</p>
+    {mode === "computer" && <>
+    <section className="section extension-section"><div className="section-header"><h2>原生 Computer Use / Browser</h2><span className="tag">{computerTools?.configured ? "开启" : "关闭"}</span></div>
+      <p className="subtext">{computerTools?.detail ?? "正在检测..."}</p>
+      <div className="row wrap"><button className="btn primary" disabled={computerToolsBusy || !computerTools || (!computerTools.configured && !computerTools.platform_supported)} onClick={() => void toggleComputerTools()}>{computerToolsBusy ? "处理中..." : computerTools?.configured ? "关闭原生增强" : "开启电脑和浏览器功能"}</button><button className="btn" disabled={computerToolsBusy} onClick={() => void api.computerToolsStatus().then(setComputerTools).catch(err => flash(message(err)))}>重新检测</button></div>
+      <small className="subtext">从客户端启动定制副本生效，原应用保持完整。原有操作审批及系统权限继续生效，服务端能力仍需实际调用验证。外部浏览器需安装并连接浏览器扩展。</small>
+    </section>
+    <section className="section extension-section"><div className="section-header"><h2>Codex++ 原生 Browser 兼容</h2><span className="tag">{nativeBrowser?.enabled ? "兼容模式开启" : "兼容模式关闭"}</span></div>
+      <p className="subtext">沿用 Codex++ 1.6.0 的原生 CUA runtime 适配、版本结构检查、备份与恢复。需要安装并连接原生 Edge / Chrome 扩展。</p>
+      <div className="row wrap"><button className="btn primary" disabled={!nativeBrowser || nativeBrowserBusy} onClick={() => void toggleNativeBrowser()}>{nativeBrowserBusy ? "处理中..." : nativeBrowser?.enabled ? "关闭兼容" : "开启兼容"}</button><button className="btn" disabled={nativeBrowserBusy} onClick={() => void refreshNativeBrowser()}>检测连接</button></div>
+      <p className="subtext">Runtime：{nativeBrowser?.runtime.detail ?? "尚未检测"}</p>
+      <p className="subtext">扩展连接：{nativeBrowser?.connection.browsers.map(browser => `${browser.family}${browser.recognized ? "（已识别）" : "（未知扩展）"}`).join("、") || "未检测到已连接扩展"}</p>
+      <small className="subtext">受控标签页请求可能携带 x-browser-agent 标识。关闭兼容后，扩展保留的标识设置仍需在扩展内关闭。电脑操作是否可用需由实际工具调用验证。</small>
+    </section>
+    <section className="section extension-section"><div className="section-header"><h2>Anthropic Computer Use Beta 标记</h2><span className="tag">{boot?.computer_use ? "已启用标记" : "未启用"}</span></div>
+      <p className="subtext">为代理请求添加 Anthropic Beta 标记。本地电脑操作和 Browser 执行需要独立的 runtime 与工具接入。</p>
       <div className="row wrap">
         <button className={`btn ${boot?.computer_use ? "" : "primary"}`} disabled={!boot || extensionBusy || boot.desktop_supported === false} onClick={() => void toggleComputerUse()}>
-          <ShieldCheck size={16} />{extensionBusy ? "处理中..." : boot?.computer_use ? "关闭能力" : "解锁能力"}
+          <ShieldCheck size={16} />{extensionBusy ? "处理中..." : boot?.computer_use ? "关闭标记" : "启用标记"}
         </button>
         {boot?.computer_use && <span className="tag success">请求头已注入</span>}
       </div>
-      <small className="subtext">解锁后请重启 Claude Code / Codex。此开关不会绕过 ChatGPT 的组织策略、地区限制或上游账号授权；若界面仍显示“已被组织停用”，需要管理员或上游开通。</small>
+      <small className="subtext">此开关只添加请求标记，不安装或注册电脑操作工具。</small>
     </section>
+    </>}
+    {mode === "maintenance" && <>
     <section className="section"><div className="section-header"><h2>工具安装</h2><button className="icon-button" title="重新检测" aria-label="重新检测"
       disabled={!!busy} onClick={detect}><RefreshCw size={17} className={busy === "detect" ? "spin" : ""} /></button></div>
       {([
@@ -1319,6 +1495,7 @@ function Tools({ boot, flash, refreshBoot, goSetup }: {
         {diag.items.map((item, index) => <div className="list-row" key={index}><span className="row">
           <span className={`dot ${item.ok ? "ok" : "error"}`} />{item.name}</span><span className="detail">{item.detail}</span></div>)}</div>}
     </section>
+    </>}
     {confirmStop && <div className="dialog-backdrop"><div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="stop-codex-title">
       <h2 id="stop-codex-title">关闭 Codex Desktop</h2>
       <p>将强制关闭 Codex Desktop。请先保存正在编辑的内容。</p>
