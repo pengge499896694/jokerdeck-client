@@ -161,6 +161,11 @@ export interface DesktopFeatureStatus {
   theme: string; overlay: boolean; auto_sync: boolean; sync_installed: boolean; provider: string;
   node_version?: string;
 }
+export interface ChatgptProxyStatus {
+  configured: boolean;
+  running: boolean;
+  port?: number;
+}
 export interface ProviderSyncResult {
   currentProvider?: string; rolloutCounts?: Record<string, number>;
   sessionFilesUpdated?: number; sqliteRowsUpdated?: number; backupDir?: string;
@@ -271,6 +276,9 @@ export const api = {
   installCli: (which: string) => call<InstallResult>("install_cli", { which }),
   downloadCodexDesktop: () => call<InstallResult>("download_codex_desktop"),
   restartCodex: () => call<InstallResult>("restart_codex"),
+  chatgptProxyStatus: () => call<ChatgptProxyStatus>("chatgpt_proxy_status"),
+  configureChatgptSubscription: (url: string) => call<void>("configure_chatgpt_subscription", { url }),
+  startChatgptProxy: () => call<number>("start_chatgpt_proxy"),
   codexDesktopRunning: () => call<boolean>("codex_desktop_running"),
   stopCodexDesktop: () => call<void>("stop_codex_desktop"),
   codexLocalization: (action: "install" | "uninstall" | "launch") =>

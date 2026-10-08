@@ -1,4 +1,5 @@
 mod api;
+mod chatgpt_proxy;
 mod cli_manager;
 mod codex_desktop;
 mod codex_desktop_download;
@@ -6,16 +7,16 @@ mod codex_enhancement;
 mod codex_inject;
 mod codex_localization;
 mod codex_sessions;
+mod codexplusplus;
 mod commands;
 mod computer_tools;
 mod config_writer;
 mod desktop_features;
 mod desktop_locale;
-mod codexplusplus;
 mod diagnostics;
 mod model_probe;
-mod proxy;
 mod provider_manager;
+mod proxy;
 mod secret_store;
 mod sidebar_delete;
 mod startup;
@@ -94,6 +95,15 @@ pub fn run() {
             // All built-in domains serve the same relay; legacy single-domain
             // installs now participate in automatic line selection too.
             store.hosts = DEFAULT_HOSTS.iter().map(|s| s.to_string()).collect();
+            // Older clients persisted the canonical host as an implicit default.
+            // Migrate it once so automatic mode can choose the measured fastest host.
+            if !store.settings.host_selection_migrated {
+                if store.settings.preferred_host.as_deref() == Some(SITE_HOST) {
+                    store.settings.preferred_host = None;
+                }
+                store.settings.host_selection_migrated = true;
+                save_store(&app_dir, &store)?;
+            }
             if store
                 .settings
                 .preferred_host
@@ -102,13 +112,6 @@ pub fn run() {
             {
                 store.settings.preferred_host = None;
             }
-            // New installations and legacy installs without an explicit
-            // preference start from the sub-prefixed relay domain.
-            if store.settings.preferred_host.is_none() {
-                store.settings.preferred_host = Some(SITE_HOST.to_string());
-                let _ = save_store(&app_dir, &store);
-            }
-
             let proxy = proxy::shared_with(store.hosts.clone(), store.settings.auto_fallback);
             {
                 let mut status = proxy.try_write().expect("new proxy state is unlocked");
@@ -141,11 +144,24 @@ pub fn run() {
                 proxy,
                 proxy_runtime: tokio::sync::Mutex::new(None),
                 configuration_lock: tokio::sync::Mutex::new(()),
+                chatgpt_proxy: tokio::sync::Mutex::new(None),
+                bundled_chatgpt_core: app.path().resource_dir().ok().map(|dir| {
+                    dir.join("chatgpt-core").join(if cfg!(windows) {
+                        "mihomo.exe"
+                    } else {
+                        "mihomo"
+                    })
+                }),
             });
             desktop_features::start(app_state.clone())?;
             let browser_state = app_state.clone();
             tauri::async_runtime::spawn(async move {
-                let enabled = browser_state.store.read().await.settings.native_browser_compatibility;
+                let enabled = browser_state
+                    .store
+                    .read()
+                    .await
+                    .settings
+                    .native_browser_compatibility;
                 codexplusplus::configure(enabled).await;
             });
             app.manage(app_state);
@@ -230,6 +246,9 @@ pub fn run() {
             commands::install_cli,
             commands::download_codex_desktop,
             commands::restart_codex,
+            commands::chatgpt_proxy_status,
+            commands::configure_chatgpt_subscription,
+            commands::start_chatgpt_proxy,
             commands::codex_desktop_running,
             commands::stop_codex_desktop,
             commands::codex_localization,

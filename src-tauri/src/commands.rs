@@ -45,14 +45,19 @@ async fn bounded_blocking<T: Send + 'static>(
 ) -> CmdResult<T> {
     // timeout 无法终止系统调用；限制未完成的探测数量，防止反复刷新耗尽线程。
     static PROBES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
-    let permit = PROBES.try_acquire().map_err(|_| "本地系统检测仍在进行".to_string())?;
-    tokio::time::timeout(deadline, tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        operation()
-    }))
-        .await
-        .map_err(|_| "本地系统操作超时".to_string())?
-        .map_err(e)
+    let permit = PROBES
+        .try_acquire()
+        .map_err(|_| "本地系统检测仍在进行".to_string())?;
+    tokio::time::timeout(
+        deadline,
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            operation()
+        }),
+    )
+    .await
+    .map_err(|_| "本地系统操作超时".to_string())?
+    .map_err(e)
 }
 
 async fn require_token(state: &AppState) -> CmdResult<String> {
@@ -80,19 +85,9 @@ async fn pick_host(state: &AppState) -> String {
             .any(|host| host.latency_ms.is_some())
             .then(|| proxy.ordered_reachable_hosts())
     };
-    // The sub relay is the canonical control-plane endpoint and is normally
-    // the fastest route for plaza/model metadata. Do not block the first
-    // request on probing every fallback domain.
+    // A manual preference remains authoritative; automatic mode uses measured latency.
     if let Some(preferred) = preferred.as_ref().filter(|host| hosts.contains(host)) {
         return preferred.clone();
-    }
-    if let Some(host) = preferred.as_ref().and_then(|preferred| {
-        cached
-            .as_ref()
-            .and_then(|ordered| ordered.iter().find(|host| *host == preferred))
-            .cloned()
-    }) {
-        return host;
     }
     if let Some(host) =
         cached.and_then(|ordered| ordered.into_iter().find(|host| hosts.contains(host)))
@@ -864,9 +859,7 @@ pub async fn apply_config(
             .unwrap_or(0);
         ps.auto_fallback = false;
         ps.extra_headers = if cfg.computer_use {
-            vec![
-                ("anthropic-beta".into(), "computer-use-2025-01-24".into()),
-            ]
+            vec![("anthropic-beta".into(), "computer-use-2025-01-24".into())]
         } else {
             Vec::new()
         };
@@ -1279,6 +1272,7 @@ pub async fn set_preferred_host(
     }
     let mut next = store.clone();
     next.settings.preferred_host = host.clone();
+    next.settings.host_selection_migrated = true;
     save_store(&state.app_dir, &next).map_err(e)?;
     *store = next;
     drop(store);
@@ -1356,7 +1350,12 @@ pub async fn detect_clis() -> CmdResult<cli_manager::CliReport> {
 
 #[tauri::command]
 pub async fn native_browser_status(state: State<'_, SharedState>) -> CmdResult<serde_json::Value> {
-    let enabled = state.store.read().await.settings.native_browser_compatibility;
+    let enabled = state
+        .store
+        .read()
+        .await
+        .settings
+        .native_browser_compatibility;
     let connection = crate::codexplusplus::native_browser_connection::check_connection().await;
     let runtime = crate::codexplusplus::native_browser::read_status();
     Ok(serde_json::json!({"enabled": enabled, "runtime": runtime, "connection": connection}))
@@ -1364,13 +1363,21 @@ pub async fn native_browser_status(state: State<'_, SharedState>) -> CmdResult<s
 
 #[tauri::command]
 pub async fn computer_tools_status() -> CmdResult<crate::computer_tools::Status> {
-    tokio::task::spawn_blocking(crate::computer_tools::status).await.map_err(e)?.map_err(e)
+    tokio::task::spawn_blocking(crate::computer_tools::status)
+        .await
+        .map_err(e)?
+        .map_err(e)
 }
 
 #[tauri::command]
-pub async fn configure_computer_tools(state: State<'_, SharedState>, enabled: bool) -> CmdResult<crate::computer_tools::Status> {
+pub async fn configure_computer_tools(
+    state: State<'_, SharedState>,
+    enabled: bool,
+) -> CmdResult<crate::computer_tools::Status> {
     let _guard = state.configuration_lock.lock().await;
-    if enabled && !cfg!(any(windows, target_os = "macos")) { return Err("仅支持 Windows 和 macOS 桌面系统".into()); }
+    if enabled && !cfg!(any(windows, target_os = "macos")) {
+        return Err("仅支持 Windows 和 macOS 桌面系统".into());
+    }
     let mut store = state.store.write().await;
     let mut next = store.clone();
     next.settings.native_computer_tools = enabled;
@@ -1383,41 +1390,72 @@ pub async fn configure_computer_tools(state: State<'_, SharedState>, enabled: bo
 #[tauri::command]
 pub async fn client_provider_policy(state: State<'_, SharedState>) -> CmdResult<serde_json::Value> {
     let host = pick_host(&state).await;
-    let policy = api::client_provider_policy(&state.http, &host).await.map_err(e)?;
+    let policy = api::client_provider_policy(&state.http, &host)
+        .await
+        .map_err(e)?;
     let token = require_token(&state).await?;
     let user = api::get_me(&state.http, &host, &token).await.map_err(e)?;
-    let provider = tokio::task::spawn_blocking(crate::provider_manager::status).await.map_err(e)?.map_err(e)?;
-    Ok(serde_json::json!({"allow_provider_switch": policy["allow_provider_switch"] == true,
+    let provider = tokio::task::spawn_blocking(crate::provider_manager::status)
+        .await
+        .map_err(e)?
+        .map_err(e)?;
+    Ok(
+        serde_json::json!({"allow_provider_switch": policy["allow_provider_switch"] == true,
         "eligible": policy["allow_provider_switch"] == true && user.total_recharged > 0.0,
-        "is_admin": user.role == "admin", "provider": provider}))
+        "is_admin": user.role == "admin", "provider": provider}),
+    )
 }
 
 #[tauri::command]
-pub async fn set_client_provider_policy(state: State<'_, SharedState>, allowed: bool) -> CmdResult<()> {
+pub async fn set_client_provider_policy(
+    state: State<'_, SharedState>,
+    allowed: bool,
+) -> CmdResult<()> {
     let host = pick_host(&state).await;
     let token = require_token(&state).await?;
     // The server's admin middleware is authoritative, regardless of local UI state.
-    api::set_client_provider_policy(&state.http, &host, &token, allowed).await.map_err(e)?;
+    api::set_client_provider_policy(&state.http, &host, &token, allowed)
+        .await
+        .map_err(e)?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn switch_external_provider(state: State<'_, SharedState>, base_url: String, api_key: String, model: String) -> CmdResult<crate::provider_manager::Status> {
+pub async fn switch_external_provider(
+    state: State<'_, SharedState>,
+    base_url: String,
+    api_key: String,
+    model: String,
+) -> CmdResult<crate::provider_manager::Status> {
     let _guard = state.configuration_lock.lock().await;
     let host = pick_host(&state).await;
     let token = require_token(&state).await?;
-    let policy = api::client_provider_policy(&state.http, &host).await.map_err(e)?;
+    let policy = api::client_provider_policy(&state.http, &host)
+        .await
+        .map_err(e)?;
     let user = api::get_me(&state.http, &host, &token).await.map_err(e)?;
-    if policy["allow_provider_switch"] != true { return Err("管理员未开放服务商切换".into()); }
-    if user.total_recharged <= 0.0 || !user.total_recharged.is_finite() { return Err("仅充值过的用户可以切换外部服务商".into()); }
+    if policy["allow_provider_switch"] != true {
+        return Err("管理员未开放服务商切换".into());
+    }
+    if user.total_recharged <= 0.0 || !user.total_recharged.is_finite() {
+        return Err("仅充值过的用户可以切换外部服务商".into());
+    }
     if crate::codex_desktop::running().await.map_err(e)? {
         return Err("请先关闭 Codex Desktop，再切换服务商以保留一致的会话状态".into());
     }
-    tokio::task::spawn_blocking(move || crate::provider_manager::switch(&base_url, &api_key, &model)).await.map_err(e)?.map_err(e)
+    tokio::task::spawn_blocking(move || {
+        crate::provider_manager::switch(&base_url, &api_key, &model)
+    })
+    .await
+    .map_err(e)?
+    .map_err(e)
 }
 
 #[tauri::command]
-pub async fn configure_native_browser(state: State<'_, SharedState>, enabled: bool) -> CmdResult<()> {
+pub async fn configure_native_browser(
+    state: State<'_, SharedState>,
+    enabled: bool,
+) -> CmdResult<()> {
     if enabled && !cfg!(windows) {
         return Err("Codex++ 原生 Browser 兼容目前仅支持 Windows".into());
     }
@@ -1468,12 +1506,99 @@ pub async fn download_codex_desktop(
 pub async fn restart_codex(state: State<'_, SharedState>) -> CmdResult<InstallResult> {
     let state = state.inner().clone();
     let _guard = state.configuration_lock.lock().await;
+    let mut outbound = state.chatgpt_proxy.lock().await;
+    crate::codex_desktop::set_outbound_proxy_port(
+        outbound
+            .as_mut()
+            .and_then(|proxy| proxy.is_running().then_some(proxy.port)),
+    );
+    drop(outbound);
     let app_dir = state.app_dir.clone();
     let (_, localized_active) = bounded_blocking(std::time::Duration::from_secs(5), move || {
         crate::codex_localization::status(&app_dir)
-    }).await?;
+    })
+    .await?;
     let (ok, log) = crate::codex_desktop::restart(localized_active).await;
     Ok(InstallResult { ok, log })
+}
+
+#[tauri::command]
+pub async fn chatgpt_proxy_status(
+    state: State<'_, SharedState>,
+) -> CmdResult<crate::chatgpt_proxy::Status> {
+    #[cfg(target_os = "macos")]
+    let configured = crate::secret_store::load_subscription().is_some();
+    #[cfg(not(target_os = "macos"))]
+    let configured = state
+        .store
+        .read()
+        .await
+        .settings
+        .chatgpt_subscription_url
+        .is_some();
+    let mut runtime = state.chatgpt_proxy.lock().await;
+    let running = runtime.as_mut().is_some_and(|proxy| proxy.is_running());
+    Ok(crate::chatgpt_proxy::Status {
+        configured,
+        running,
+        port: if running {
+            runtime.as_ref().map(|proxy| proxy.port)
+        } else {
+            None
+        },
+    })
+}
+
+#[tauri::command]
+pub async fn configure_chatgpt_subscription(
+    state: State<'_, SharedState>,
+    url: String,
+) -> CmdResult<()> {
+    crate::chatgpt_proxy::validate_subscription_url(&url).map_err(e)?;
+    #[cfg(target_os = "macos")]
+    crate::secret_store::save_subscription(url.trim()).map_err(e)?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut store = state.store.write().await;
+        let mut next = store.clone();
+        next.settings.chatgpt_subscription_url = Some(url.trim().to_owned());
+        save_store(&state.app_dir, &next).map_err(e)?;
+        *store = next;
+    }
+    *state.chatgpt_proxy.lock().await = None;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_chatgpt_proxy(state: State<'_, SharedState>) -> CmdResult<u16> {
+    #[cfg(target_os = "macos")]
+    let subscription = crate::secret_store::load_subscription();
+    #[cfg(not(target_os = "macos"))]
+    let subscription = state
+        .store
+        .read()
+        .await
+        .settings
+        .chatgpt_subscription_url
+        .clone();
+    let subscription = subscription.ok_or_else(|| "请先填写 ChatGPT 网络订阅链接".to_string())?;
+    let mut runtime = state.chatgpt_proxy.lock().await;
+    if let Some(current) = runtime.as_mut() {
+        if current.is_running() {
+            return Ok(current.port);
+        }
+    }
+    *runtime = None;
+    let next = crate::chatgpt_proxy::start(
+        &state.app_dir,
+        &subscription,
+        state.bundled_chatgpt_core.as_deref(),
+    )
+    .await
+    .map_err(e)?;
+    let port = next.port;
+    *runtime = Some(next);
+    Ok(port)
 }
 
 #[tauri::command]
@@ -1503,6 +1628,13 @@ pub async fn codex_localization(
             .unwrap_or_else(|| crate::state::SITE_HOST.to_string())
     };
     let _guard = state.configuration_lock.lock().await;
+    let mut outbound = state.chatgpt_proxy.lock().await;
+    crate::codex_desktop::set_outbound_proxy_port(
+        outbound
+            .as_mut()
+            .and_then(|proxy| proxy.is_running().then_some(proxy.port)),
+    );
+    drop(outbound);
     let completed = std::sync::atomic::AtomicU8::new(0);
     let report = |mut value: crate::codex_localization::LocalizationProgress| {
         // Installer substeps can report 100 before the actual desktop launch.
@@ -1650,7 +1782,9 @@ pub async fn get_bootstrap(state: State<'_, SharedState>) -> CmdResult<Bootstrap
         let credentials = store.clone();
         match bounded_blocking(std::time::Duration::from_secs(3), move || {
             saved_login_password(&credentials)
-        }).await {
+        })
+        .await
+        {
             Ok(password) => password,
             Err(error) => {
                 tracing::warn!(%error, "保存的密码读取超时或失败，可手动登录");
@@ -1662,7 +1796,9 @@ pub async fn get_bootstrap(state: State<'_, SharedState>) -> CmdResult<Bootstrap
     let (codex_localization_available, codex_localization_active) =
         bounded_blocking(std::time::Duration::from_secs(5), move || {
             crate::codex_localization::status(&app_dir)
-        }).await.unwrap_or_else(|error| {
+        })
+        .await
+        .unwrap_or_else(|error| {
             tracing::warn!(%error, "Codex 本地化状态检测失败");
             (false, false)
         });
@@ -1716,7 +1852,10 @@ pub async fn save_login(
                 crate::secret_store::save_password(&credential_email, &credential_password)?;
             }
             Ok(())
-        }).await.map_err(e)?.map_err(e)?;
+        })
+        .await
+        .map_err(e)?
+        .map_err(e)?;
     }
     let mut store = state.store.write().await;
     store.last_email = Some(email);
@@ -1765,7 +1904,9 @@ pub async fn forget_password(state: State<'_, SharedState>) -> CmdResult<()> {
         let email = state.store.read().await.last_email.clone();
         if let Some(email) = email {
             tokio::task::spawn_blocking(move || crate::secret_store::remove_password(&email))
-                .await.map_err(e)?.map_err(e)?;
+                .await
+                .map_err(e)?
+                .map_err(e)?;
         }
     }
     let mut store = state.store.write().await;
@@ -1794,11 +1935,17 @@ pub async fn set_site_url(state: State<'_, SharedState>, url: String) -> CmdResu
     {
         let previous = {
             let store = state.store.read().await;
-            if store.hosts.first() != Some(&host) { store.last_email.clone() } else { None }
+            if store.hosts.first() != Some(&host) {
+                store.last_email.clone()
+            } else {
+                None
+            }
         };
         if let Some(email) = previous {
             tokio::task::spawn_blocking(move || crate::secret_store::remove_password(&email))
-                .await.map_err(e)?.map_err(e)?;
+                .await
+                .map_err(e)?
+                .map_err(e)?;
         }
     }
     let mut store = state.store.write().await;
@@ -1866,12 +2013,18 @@ mod tests {
         let result = bounded_blocking(std::time::Duration::from_millis(30), move || {
             // 模拟等待 Keychain 授权的系统调用，最长 2 秒防止失败时挂住测试。
             let _ = waiting.recv_timeout(std::time::Duration::from_secs(2));
-        }).await;
+        })
+        .await;
         let elapsed = started.elapsed();
         let _ = release.send(());
         assert!(result.is_err());
-        assert!(elapsed < std::time::Duration::from_secs(1), "系统探测阻塞了异步线程：{elapsed:?}");
-        assert!(bounded_blocking(std::time::Duration::from_secs(1), || 42).await.is_ok());
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "系统探测阻塞了异步线程：{elapsed:?}"
+        );
+        assert!(bounded_blocking(std::time::Duration::from_secs(1), || 42)
+            .await
+            .is_ok());
     }
 
     #[test]
@@ -1935,6 +2088,8 @@ mod tests {
             proxy: crate::proxy::shared_with(vec![host], false),
             proxy_runtime: tokio::sync::Mutex::new(None),
             configuration_lock: tokio::sync::Mutex::new(()),
+            chatgpt_proxy: tokio::sync::Mutex::new(None),
+            bundled_chatgpt_core: None,
         };
         let models = group_models(&state, 47).await.unwrap();
         assert_eq!(models.claude_models, ["claude-relay"]);

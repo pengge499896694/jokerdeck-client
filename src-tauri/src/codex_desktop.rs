@@ -8,7 +8,21 @@
 use anyhow::{anyhow, bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
+
+static OUTBOUND_PROXY_PORT: AtomicU16 = AtomicU16::new(0);
+
+pub(crate) fn set_outbound_proxy_port(port: Option<u16>) {
+    OUTBOUND_PROXY_PORT.store(port.unwrap_or(0), Ordering::Relaxed);
+}
+
+fn outbound_proxy_port() -> Option<u16> {
+    match OUTBOUND_PROXY_PORT.load(Ordering::Relaxed) {
+        0 => None,
+        port => Some(port),
+    }
+}
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -423,7 +437,19 @@ async fn launch_patched_windows(app_dir: &Path) -> Result<(bool, String)> {
         .ok_or_else(|| anyhow!("汉化副本缺少可执行文件，请重新安装汉化包"))?;
     const SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
-$process = Start-Process -FilePath $env:CODEX_LAUNCH_EXE -WorkingDirectory $env:CODEX_LAUNCH_DIR -PassThru
+$arguments = @()
+if ($env:CHATGPT_OUTBOUND_PORT) {
+    $arguments += "--proxy-server=http://127.0.0.1:$env:CHATGPT_OUTBOUND_PORT"
+    $env:HTTP_PROXY = "http://127.0.0.1:$env:CHATGPT_OUTBOUND_PORT"
+    $env:HTTPS_PROXY = $env:HTTP_PROXY
+    $env:ALL_PROXY = $env:HTTP_PROXY
+    $env:NO_PROXY = '127.0.0.1,localhost'
+}
+if ($arguments.Count -gt 0) {
+    $process = Start-Process -FilePath $env:CODEX_LAUNCH_EXE -ArgumentList $arguments -WorkingDirectory $env:CODEX_LAUNCH_DIR -PassThru
+} else {
+    $process = Start-Process -FilePath $env:CODEX_LAUNCH_EXE -WorkingDirectory $env:CODEX_LAUNCH_DIR -PassThru
+}
 for ($attempt = 0; $attempt -lt 20; $attempt++) {
     Start-Sleep -Milliseconds 250
     $running = Get-Process -Name ChatGPT, Codex -ErrorAction SilentlyContinue |
@@ -439,7 +465,21 @@ throw '汉化版 Codex 未能启动；请重新安装汉化包或检查 Codex �
     let envs = [
         ("CODEX_LAUNCH_EXE", exe.to_string_lossy().into_owned()),
         ("CODEX_LAUNCH_DIR", app_dir.to_string_lossy().into_owned()),
-        ("JOKERDECK_ENABLE_NATIVE_CUA", if crate::computer_tools::enabled() { "1" } else { "0" }.to_owned()),
+        (
+            "JOKERDECK_ENABLE_NATIVE_CUA",
+            if crate::computer_tools::enabled() {
+                "1"
+            } else {
+                "0"
+            }
+            .to_owned(),
+        ),
+        (
+            "CHATGPT_OUTBOUND_PORT",
+            outbound_proxy_port()
+                .map(|port| port.to_string())
+                .unwrap_or_default(),
+        ),
     ];
     powershell(SCRIPT, &envs, 30).await
 }
@@ -480,7 +520,14 @@ async fn launch_macos(app_bundle: &Path, localized: bool) -> Result<(bool, Strin
     let mut command = tokio::process::Command::new(&executable);
     command
         .current_dir(app_bundle.join("Contents/Resources"))
-        .env("JOKERDECK_ENABLE_NATIVE_CUA", if crate::computer_tools::enabled() { "1" } else { "0" })
+        .env(
+            "JOKERDECK_ENABLE_NATIVE_CUA",
+            if crate::computer_tools::enabled() {
+                "1"
+            } else {
+                "0"
+            },
+        )
         .env(
             "LANG",
             if localized {
@@ -499,6 +546,15 @@ async fn launch_macos(app_bundle: &Path, localized: bool) -> Result<(bool, Strin
         );
     if localized {
         command.arg("--lang=zh-CN");
+    }
+    if let Some(port) = outbound_proxy_port() {
+        let url = format!("http://127.0.0.1:{port}");
+        command
+            .arg(format!("--proxy-server={url}"))
+            .env("HTTP_PROXY", &url)
+            .env("HTTPS_PROXY", &url)
+            .env("ALL_PROXY", &url)
+            .env("NO_PROXY", "127.0.0.1,localhost");
     }
     command
         .spawn()
@@ -524,7 +580,12 @@ fn localization_launch_target(original: PathBuf, enhanced: Result<PathBuf>) -> (
         Ok(app) => (app, String::new()),
         Err(error) => {
             tracing::warn!(%error, "macOS 可选增强失败，使用原应用的中文启动链路");
-            (original, format!("可选增强未启用：{error}；此次会话删除、统计皮肤及 Computer Use 增强不生效。"))
+            (
+                original,
+                format!(
+                    "可选增强未启用：{error}；此次会话删除、统计皮肤及 Computer Use 增强不生效。"
+                ),
+            )
         }
     }
 }
@@ -575,7 +636,7 @@ pub async fn launch_english() -> Result<String> {
             Some(app) => {
                 let enhanced = crate::sidebar_delete::macos_copy(&app).await?;
                 launch_macos(&enhanced, false).await
-            },
+            }
             None => run_tool("open", &["-a", "Codex"]).await,
         }
     } else {
@@ -635,7 +696,8 @@ mod tests {
     #[test]
     fn optional_patch_failure_preserves_localized_launch() {
         let original = PathBuf::from("/Applications/Codex.app");
-        let (target, warning) = localization_launch_target(original.clone(), Err(anyhow!("bundle structure changed")));
+        let (target, warning) =
+            localization_launch_target(original.clone(), Err(anyhow!("bundle structure changed")));
         assert_eq!(target, original);
         assert!(warning.contains("bundle structure changed"));
         assert!(warning.contains("不生效"));

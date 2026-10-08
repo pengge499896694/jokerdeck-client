@@ -17,8 +17,7 @@ type SiteTab = typeof allSiteTabs[number]["id"];
 type Tab = "setup" | "tools" | "computer" | "providers" | "sessions" | "enhance" | "account" | SiteTab;
 type AuthPage = "register" | "forgot-password" | "reset-password";
 type CodexPreset = {
-  claude: boolean; codex: boolean; groupId?: number; claudeModel?: string; codexModel?: string;
-  localization: boolean; computerUse: boolean; browser: boolean;
+  groupId: number; localization: boolean; computerUse: boolean;
 };
 const logo = new URL("../icon-source.png", import.meta.url).href;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -26,6 +25,10 @@ const formatBytes = (value: number) => {
   if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 };
+const supportsCodex = (group: PlazaGroup) => group.models.some((model) => {
+  const platform = model.platform || group.platform;
+  return !["anthropic", "claude"].includes(platform.toLowerCase());
+});
 const tabs = [
   { id: "setup", title: "控制台", icon: LayoutDashboard },
   { id: "providers", title: "服务商管理", icon: Globe },
@@ -169,24 +172,27 @@ export default function App() {
   const runCodexPreset = async (preset: CodexPreset) => {
     if (restarting) return;
     setRestarting(true);
-    setLocaleProgress({ percent: 3, detail: "正在应用 Codex 增强设置" });
+    setLocaleProgress({ percent: 3, detail: "正在连接 ChatGPT 专用网络" });
     try {
-      await api.applyConfig(preset.claude, preset.codex, preset.groupId, preset.claudeModel || undefined, preset.codexModel || undefined);
-      await api.setExtensions(preset.computerUse);
+      await api.startChatgptProxy();
+      setLocaleProgress({ percent: 25, detail: "正在创建分组 Key 并启动本地代理" });
+      await api.applyConfig(false, true, preset.groupId);
       await api.configureComputerTools(preset.computerUse);
-      await api.configureNativeBrowser(preset.browser);
+      setLocaleProgress({ percent: 65, detail: "正在准备中文界面并启动 ChatGPT" });
       if (preset.localization) await api.codexLocalization("launch");
       else {
-        await api.codexLocalization("uninstall").catch(() => {});
-        const result = await api.restartCodex();
-        if (!result.ok) throw new Error(result.log);
+        if (boot?.codex_localization_active) await api.codexLocalization("uninstall");
+        else {
+          const result = await api.restartCodex();
+          if (!result.ok) throw new Error(result.log);
+        }
       }
       setLocaleProgress({ percent: 100, detail: `${desktopName} 已按习惯启动` });
-      flash("Codex 已按选择完成配置并重启");
+      flash(`${desktopName} 已按选择完成配置并重启`);
       await refreshBoot();
     } catch (err) {
       setLocaleProgress((current) => ({ percent: current?.percent ?? 0, detail: `操作失败：${message(err)}` }));
-      flash(message(err));
+      throw err;
     } finally { setRestarting(false); }
   };
   const refreshBoot = async () => {
@@ -999,10 +1005,12 @@ function CodexEnhance({ boot, flash, goTools, goSessions, restarting, onRestart 
   const [syncLog, setSyncLog] = useState("");
   const [confirmation, setConfirmation] = useState<{ action: "sync" | "restore"; backup?: string } | null>(null);
   const [restartOpen, setRestartOpen] = useState(false);
-  const [preset, setPreset] = useState<CodexPreset>({ claude: true, codex: true, localization: true, computerUse: false, browser: false });
+  const [preset, setPreset] = useState<CodexPreset>({ groupId: 0, localization: true, computerUse: false });
   const [groups, setGroups] = useState<PlazaGroup[]>([]);
-  const [groupModels, setGroupModels] = useState<GroupModels | null>(null);
   const [rememberPreset, setRememberPreset] = useState(false);
+  const [subscriptionUrl, setSubscriptionUrl] = useState("");
+  const [subscriptionConfigured, setSubscriptionConfigured] = useState(false);
+  const [restartBusy, setRestartBusy] = useState(false);
   const nodeReady = Boolean(features?.node_version);
   const themes = [
     { id: "native", name: "原生", colors: ["#f5f5f5", "#202020", "#8b8b8b"] },
@@ -1030,39 +1038,67 @@ function CodexEnhance({ boot, flash, goTools, goSessions, restarting, onRestart 
   };
   useEffect(() => {
     api.desktopFeatureStatus().then(setFeatures).catch((err) => setFeatureError(message(err)));
-    api.plaza().then(setGroups).catch(() => {});
+    Promise.all([api.plaza(), api.groups()]).then(([plaza, available]) =>
+      setGroups(plaza.filter((group) => supportsCodex(group) && available.some((item) => item.id === group.id)))).catch(() => {});
+    api.chatgptProxyStatus().then((value) => setSubscriptionConfigured(value.configured)).catch(() => {});
     try {
-      const saved = localStorage.getItem("jokerdeck.codex-restart-preset.v1");
-      if (saved) setPreset(JSON.parse(saved));
+      const saved = localStorage.getItem("jokerdeck.codex-restart-preset.v3");
+      if (saved) {
+        const value = JSON.parse(saved);
+        if (Number.isSafeInteger(value.groupId) && typeof value.localization === "boolean" &&
+          typeof value.computerUse === "boolean") {
+          setPreset(value);
+          setRememberPreset(true);
+        }
+      }
     } catch {}
   }, []);
   const openRestart = async () => {
     if (restarting) return;
     try {
-      const saved = localStorage.getItem("jokerdeck.codex-restart-preset.v1");
+      const [plaza, available, network] = await Promise.all([api.plaza(), api.groups(), api.chatgptProxyStatus()]);
+      const currentGroups = plaza.filter((group) =>
+        supportsCodex(group) && available.some((item) => item.id === group.id));
+      setGroups(currentGroups);
+      setSubscriptionConfigured(network.configured);
+      const saved = localStorage.getItem("jokerdeck.codex-restart-preset.v3");
       if (saved) {
         const value = JSON.parse(saved) as Partial<CodexPreset>;
-        if (typeof value.claude === "boolean" && typeof value.codex === "boolean" &&
-          typeof value.localization === "boolean" && typeof value.computerUse === "boolean" &&
-          typeof value.browser === "boolean") {
+        if (network.configured && Number.isSafeInteger(value.groupId) &&
+          currentGroups.some((group) => group.id === value.groupId) &&
+          typeof value.localization === "boolean" && typeof value.computerUse === "boolean") {
           await onRestart(value as CodexPreset);
           return;
         }
       }
-    } catch {}
+      if (!currentGroups.some((group) => group.id === preset.groupId)) {
+        const recommended = [...currentGroups].sort((a, b) =>
+          (a.multiplier ?? Infinity) - (b.multiplier ?? Infinity) || a.id - b.id)[0];
+        if (recommended) setPreset((current) => ({ ...current, groupId: recommended.id }));
+      }
+    } catch (err) { setFeatureError(message(err)); }
     setRestartOpen(true);
   };
   const submitRestart = async () => {
-    if (!preset.claude && !preset.codex) { setFeatureError("至少选择 Claude Code 或 Codex"); return; }
-    if (rememberPreset) localStorage.setItem("jokerdeck.codex-restart-preset.v1", JSON.stringify(preset));
-    setRestartOpen(false);
-    await onRestart(preset);
+    if (!groups.some((group) => group.id === preset.groupId)) { setFeatureError("请先选择可用分组"); return; }
+    if (!subscriptionConfigured && !subscriptionUrl.trim()) { setFeatureError("请填写 ChatGPT 网络订阅链接"); return; }
+    setRestartBusy(true); setFeatureError("");
+    try {
+      if (subscriptionUrl.trim()) {
+        await api.configureChatgptSubscription(subscriptionUrl.trim());
+        setSubscriptionUrl("");
+        setSubscriptionConfigured(true);
+      }
+      await onRestart(preset);
+      if (rememberPreset) localStorage.setItem("jokerdeck.codex-restart-preset.v3", JSON.stringify(preset));
+      else localStorage.removeItem("jokerdeck.codex-restart-preset.v3");
+      setRestartOpen(false);
+    } catch (err) { setFeatureError(message(err)); }
+    finally { setRestartBusy(false); }
   };
   const selectedGroup = groups.find((item) => item.id === preset.groupId);
-  const loadPresetModels = async (id: number) => {
-    setPreset((current) => ({ ...current, groupId: id, claudeModel: "", codexModel: "" }));
-    try { setGroupModels(await api.groupModels(id)); } catch (err) { setFeatureError(message(err)); }
-  };
+  const groupLabel = (group: PlazaGroup) =>
+    `${group.name}${group.multiplier == null ? "" : ` · ${group.multiplier}x`}`;
   const refresh = async () => {
     try { setStatus(await api.codexEnhancementStatus()); }
     catch (err) { flash(message(err)); }
@@ -1161,23 +1197,24 @@ function CodexEnhance({ boot, flash, goTools, goSessions, restarting, onRestart 
       <button className="btn" onClick={goSessions}><History size={16} />管理本地会话</button>
     </section>
     {restartOpen && <div className="dialog-backdrop"><div className="dialog restart-dialog" role="dialog" aria-modal="true" aria-labelledby="restart-title">
-      <h2 id="restart-title">配置并重启 Codex</h2>
-      <p>选择本次要启用的能力。勾选“保留习惯”后，下次点击将直接执行。</p>
-      <div className="field"><label htmlFor="restart-group">分组</label><select id="restart-group" className="input" value={preset.groupId ?? ""} onChange={(event) => void loadPresetModels(Number(event.target.value))}>
-        <option value="">选择分组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></div>
-      {selectedGroup && <div className="model-grid">
-        <div className="field"><label htmlFor="restart-claude-model">Claude 模型</label><select id="restart-claude-model" className="input" value={preset.claudeModel ?? ""} onChange={(event) => setPreset((p) => ({ ...p, claudeModel: event.target.value }))}>{(groupModels?.claude_models ?? []).map((model) => <option key={model}>{model}</option>)}</select></div>
-        <div className="field"><label htmlFor="restart-codex-model">GPT / Codex 模型</label><select id="restart-codex-model" className="input" value={preset.codexModel ?? ""} onChange={(event) => setPreset((p) => ({ ...p, codexModel: event.target.value }))}>{(groupModels?.codex_models ?? []).map((model) => <option key={model}>{model}</option>)}</select></div>
-      </div>}
-      <div className="tool-options restart-options">
-        <label className="tool-choice"><input type="checkbox" checked={preset.claude} onChange={(e) => setPreset((p) => ({ ...p, claude: e.target.checked }))} /><span><strong>启用 Claude Code</strong><small>写入 Claude Code 配置</small></span></label>
-        <label className="tool-choice"><input type="checkbox" checked={preset.codex} onChange={(e) => setPreset((p) => ({ ...p, codex: e.target.checked }))} /><span><strong>启用 GPT / Codex</strong><small>写入 Codex 模型与分组</small></span></label>
-        <label className="tool-choice"><input type="checkbox" checked={preset.localization} onChange={(e) => setPreset((p) => ({ ...p, localization: e.target.checked }))} /><span><strong>中文界面</strong><small>新版客户端不兼容时保留官方语言设置</small></span></label>
-        <label className="tool-choice"><input type="checkbox" checked={preset.computerUse} onChange={(e) => setPreset((p) => ({ ...p, computerUse: e.target.checked }))} /><span><strong>强开 Computer Use</strong><small>同时启用本地电脑与浏览器能力</small></span></label>
-        <label className="tool-choice"><input type="checkbox" checked={preset.browser} onChange={(e) => setPreset((p) => ({ ...p, browser: e.target.checked }))} /><span><strong>Browser 兼容</strong><small>启用 Codex++ 原生 Browser 适配</small></span></label>
-      </div>
+      <h2 id="restart-title">启动 {navigator.platform.toLowerCase().includes("mac") ? "ChatGPT" : "Codex"}</h2>
+      <div className="field"><label htmlFor="restart-group">分组</label><select id="restart-group" className="input" value={preset.groupId || ""} onChange={(event) => setPreset((current) => ({ ...current, groupId: Number(event.target.value) }))}>
+        <option value="">选择分组</option>
+        {!!groups.filter((group) => !group.is_exclusive).length && <optgroup label="公开分组">{groups.filter((group) => !group.is_exclusive).map((group) =>
+          <option key={group.id} value={group.id}>{groupLabel(group)}</option>)}</optgroup>}
+        {!!groups.filter((group) => group.is_exclusive).length && <optgroup label="专属分组">{groups.filter((group) => group.is_exclusive).map((group) =>
+          <option key={group.id} value={group.id}>{groupLabel(group)}</option>)}</optgroup>}
+      </select></div>
+      {selectedGroup && <small className="subtext">{selectedGroup.is_exclusive ? "专属" : "公开"}分组 · 当前选择</small>}
+      {!groups.length && <div className="alert warning">没有可用的 GPT / Codex 分组，请检查账户授权。</div>}
+      <div className="field"><label htmlFor="restart-subscription">ChatGPT 网络订阅</label><input id="restart-subscription" className="input"
+        type="password" autoComplete="off" placeholder={subscriptionConfigured ? "已保存；留空沿用，输入新地址可更换" : "首次粘贴 HTTPS 订阅链接"}
+        value={subscriptionUrl} onChange={(event) => setSubscriptionUrl(event.target.value)} /></div>
+      <label className="feature-toggle"><input type="checkbox" checked={preset.localization} onChange={(e) => setPreset((p) => ({ ...p, localization: e.target.checked }))} /><span>中文界面</span></label>
+      <label className="feature-toggle"><input type="checkbox" checked={preset.computerUse} onChange={(e) => setPreset((p) => ({ ...p, computerUse: e.target.checked }))} /><span>启用本地 Computer Use 适配</span></label>
       <label className="feature-toggle"><input type="checkbox" checked={rememberPreset} onChange={(e) => setRememberPreset(e.target.checked)} /><span>保留习惯，下次直接一键重启</span></label>
-      <div className="row"><button className="btn" onClick={() => setRestartOpen(false)}>取消</button><button className="btn primary" onClick={() => void submitRestart()}>保存并重启</button></div>
+      {featureError && <div className="alert error" role="alert">{featureError}</div>}
+      <div className="row"><button className="btn" disabled={restartBusy} onClick={() => setRestartOpen(false)}>取消</button><button className="btn primary" disabled={restartBusy || restarting || !preset.groupId} onClick={() => void submitRestart()}>{restartBusy ? "正在启动..." : "启动"}</button></div>
     </div></div>}
   </>;
 }

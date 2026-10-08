@@ -77,6 +77,17 @@ pub fn remove_password(email: &str) -> Result<()> {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub fn save_subscription(url: &str) -> Result<()> {
+    entry("chatgpt-subscription")?.set_password(url)?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn load_subscription() -> Option<String> {
+    entry("chatgpt-subscription").ok()?.get_password().ok()
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     #[test]

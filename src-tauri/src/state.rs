@@ -28,6 +28,8 @@ pub struct Settings {
     pub auto_fallback: bool,
     #[serde(default)]
     pub preferred_host: Option<String>,
+    #[serde(default)]
+    pub host_selection_migrated: bool,
     /// Group the user picked to use by default. `None` = cheapest available.
     pub preferred_group_id: Option<i64>,
     /// Model written into Claude Code's config (`ANTHROPIC_MODEL`).
@@ -48,6 +50,8 @@ pub struct Settings {
     pub usage_overlay: bool,
     #[serde(default)]
     pub provider_auto_sync: bool,
+    #[serde(default)]
+    pub chatgpt_subscription_url: Option<String>,
 }
 
 fn native_theme() -> String {
@@ -63,6 +67,7 @@ impl Default for Settings {
             proxy_port: DEFAULT_PROXY_PORT,
             auto_fallback: false,
             preferred_host: None,
+            host_selection_migrated: false,
             preferred_group_id: None,
             claude_model: None,
             codex_model: None,
@@ -73,6 +78,7 @@ impl Default for Settings {
             codex_theme: native_theme(),
             usage_overlay: true,
             provider_auto_sync: false,
+            chatgpt_subscription_url: None,
         }
     }
 }
@@ -128,6 +134,8 @@ pub struct AppState {
     pub proxy: ProxyShared,
     pub proxy_runtime: tokio::sync::Mutex<Option<ProxyRuntime>>,
     pub configuration_lock: tokio::sync::Mutex<()>,
+    pub chatgpt_proxy: tokio::sync::Mutex<Option<crate::chatgpt_proxy::Runtime>>,
+    pub bundled_chatgpt_core: Option<PathBuf>,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -166,6 +174,10 @@ pub fn save_store(app_dir: &std::path::Path, store: &Store) -> anyhow::Result<()
     #[cfg(target_os = "macos")]
     let stored = Store {
         saved_password: None,
+        settings: Settings {
+            chatgpt_subscription_url: None,
+            ..store.settings.clone()
+        },
         ..store.clone()
     };
     #[cfg(not(target_os = "macos"))]

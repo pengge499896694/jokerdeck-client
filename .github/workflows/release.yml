@@ -48,10 +48,50 @@ jobs:
       - name: Test
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
+      - name: Bundle verified ChatGPT proxy core
+        shell: pwsh
+        run: |
+          $version = 'v1.19.32'
+          switch ('${{ matrix.platform }}') {
+            'windows-x86_64' { $asset = "mihomo-windows-amd64-compatible-$version.zip"; $sha = '974a4d7ad69aed27aa2e8f91d61113573c14dadb14562c63e58effabf59816f0'; $binary = 'mihomo.exe' }
+            'darwin-aarch64' { $asset = "mihomo-darwin-arm64-$version.gz"; $sha = '3312a6780652c622890fd4357c6a853bbf865464fd047ac7b7f52dab8de18652'; $binary = 'mihomo' }
+            'darwin-x86_64' { $asset = "mihomo-darwin-amd64-compatible-$version.gz"; $sha = '18b382df77bded2ad0fb3db27db5636cb15b20729d5ba995a357eeb9b46bf507'; $binary = 'mihomo' }
+            default { throw 'Unsupported platform' }
+          }
+          $archive = Join-Path $env:RUNNER_TEMP $asset
+          Invoke-WebRequest "https://github.com/MetaCubeX/mihomo/releases/download/$version/$asset" -OutFile $archive
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant() -ne $sha) { throw 'Proxy core checksum mismatch' }
+          $dir = 'src-tauri/resources'
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          $destination = Join-Path $dir $binary
+          if ($asset.EndsWith('.zip')) {
+            $unpack = Join-Path $env:RUNNER_TEMP 'mihomo-core'
+            Expand-Archive -LiteralPath $archive -DestinationPath $unpack
+            $source = Get-ChildItem -LiteralPath $unpack -Filter '*.exe' -File -Recurse | Select-Object -First 1
+            if (-not $source) { throw 'Proxy core binary missing from archive' }
+            Copy-Item -LiteralPath $source.FullName -Destination $destination
+          } else {
+            $inputStream = [IO.File]::OpenRead($archive)
+            $gzip = [IO.Compression.GZipStream]::new($inputStream, [IO.Compression.CompressionMode]::Decompress)
+            $outputStream = [IO.File]::Create($destination)
+            try { $gzip.CopyTo($outputStream) } finally { $outputStream.Dispose(); $gzip.Dispose(); $inputStream.Dispose() }
+            chmod +x $destination
+          }
+          Invoke-WebRequest "https://raw.githubusercontent.com/MetaCubeX/mihomo/$version/LICENSE" -OutFile "$dir/LICENSE"
+          Invoke-WebRequest "https://github.com/MetaCubeX/mihomo/archive/refs/tags/$version.zip" -OutFile "$dir/mihomo-source-$version.zip"
+          $resources = @{
+            "resources/$binary" = "chatgpt-core/$binary"
+            "resources/LICENSE" = "chatgpt-core/LICENSE"
+            "resources/mihomo-source-$version.zip" = "chatgpt-core/mihomo-source-$version.zip"
+            "../THIRD_PARTY_NOTICES.md" = "chatgpt-core/THIRD_PARTY_NOTICES.md"
+          }
+          @{ bundle = @{ resources = $resources } } |
+            ConvertTo-Json -Depth 5 | Set-Content 'src-tauri/tauri.core.conf.json'
+
       - name: Build installer
         env:
           JOKERDECK_UPDATE_MANIFEST_URL: https://jokerdeck.de5.net/client-site/latest.json
-        run: pnpm tauri build --bundles ${{ matrix.bundle }}
+        run: pnpm tauri build --config src-tauri/tauri.core.conf.json --bundles ${{ matrix.bundle }}
 
       - name: Stage installer
         shell: pwsh

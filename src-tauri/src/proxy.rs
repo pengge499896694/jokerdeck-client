@@ -99,19 +99,13 @@ impl ProxyState {
         let mut idxs: Vec<usize> = (0..self.hosts.len()).collect();
         idxs.sort_by_key(|&i| {
             let h = &self.hosts[i];
-            let active_bonus = if i == self.active_host_idx { 0 } else { 1 };
             let health_rank = if h.healthy { 0 } else { 2 };
             let manual_rank = if self.preferred_host.as_deref() == Some(&h.host) {
                 0
             } else {
                 1
             };
-            (
-                manual_rank,
-                health_rank,
-                active_bonus,
-                h.latency_ms.unwrap_or(u64::MAX),
-            )
+            (manual_rank, health_rank, h.latency_ms.unwrap_or(u64::MAX))
         });
         idxs.into_iter()
             .map(|i| (i, self.hosts[i].host.clone()))
