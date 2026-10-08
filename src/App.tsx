@@ -1153,7 +1153,7 @@ function BeginnerGuide({ step, setStep, onTools, onClose }: {
   </div>;
 }
 
-function Tools({ boot, flash, goSetup }: {
+function Tools({ boot, flash, refreshBoot, goSetup }: {
   boot: Bootstrap | null;
   flash: (text: string) => void;
   refreshBoot: () => Promise<Bootstrap>;
@@ -1167,6 +1167,7 @@ function Tools({ boot, flash, goSetup }: {
   const [downloadDetails, setDownloadDetails] = useState<string[]>([]);
   const [desktopRunning, setDesktopRunning] = useState<boolean | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
+  const [extensionBusy, setExtensionBusy] = useState(false);
   const refreshDesktop = async () => {
     if (isPreview) return;
     try { setDesktopRunning(await api.codexDesktopRunning()); }
@@ -1232,6 +1233,16 @@ function Tools({ boot, flash, goSetup }: {
     try { setDiag(await api.diagnostics()); } catch (err) { flash(message(err)); }
     finally { setBusy(""); }
   };
+  const toggleComputerUse = async () => {
+    if (!boot || extensionBusy) return;
+    setExtensionBusy(true);
+    try {
+      await api.setExtensions(!boot.computer_use);
+      await refreshBoot();
+      flash(boot.computer_use ? "Computer use / Browser 能力已关闭" : "Computer use / Browser 能力已解锁；请重启正在运行的工具");
+    } catch (err) { flash(message(err)); }
+    finally { setExtensionBusy(false); }
+  };
   const controlDesktop = async (action: "start" | "stop") => {
     setConfirmStop(false);
     setBusy(action);
@@ -1261,6 +1272,16 @@ function Tools({ boot, flash, goSetup }: {
         <button className="btn" disabled={!!busy || !desktopRunning} onClick={() => setConfirmStop(true)}>
           <X size={16} />关闭</button>
       </div>
+    </section>
+    <section className="section extension-section"><div className="section-header"><h2>Computer use / Browser</h2><span className={`tag ${boot?.computer_use ? "success" : "warning"}`}>{boot?.computer_use ? "已解锁" : "未启用"}</span></div>
+      <p className="subtext">为本地代理请求添加 Anthropic computer-use Beta 标记，使支持该能力的模型可以使用电脑操作和浏览器工具。</p>
+      <div className="row wrap">
+        <button className={`btn ${boot?.computer_use ? "" : "primary"}`} disabled={!boot || extensionBusy || boot.desktop_supported === false} onClick={() => void toggleComputerUse()}>
+          <ShieldCheck size={16} />{extensionBusy ? "处理中..." : boot?.computer_use ? "关闭能力" : "解锁能力"}
+        </button>
+        {boot?.computer_use && <span className="tag success">请求头已注入</span>}
+      </div>
+      <small className="subtext">解锁后请重启 Claude Code / Codex。此开关不会绕过 ChatGPT 的组织策略、地区限制或上游账号授权；若界面仍显示“已被组织停用”，需要管理员或上游开通。</small>
     </section>
     <section className="section"><div className="section-header"><h2>工具安装</h2><button className="icon-button" title="重新检测" aria-label="重新检测"
       disabled={!!busy} onClick={detect}><RefreshCw size={17} className={busy === "detect" ? "spin" : ""} /></button></div>
