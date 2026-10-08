@@ -1,3 +1,8 @@
+v0.1.34
+
+- 在工具与修复页新增 Computer use / Browser 的本地代理 Beta 请求头开关，可即时启用并持久化。
+- 该开关不改变 ChatGPT 组织策略、地区限制和上游账号授权。
+
 v0.1.33
 
 - 修复 Provider metadata 同步：自动选择支持 SQLite backup 的 Node.js 24+，保留会话与 SQLite 备份恢复能力。
